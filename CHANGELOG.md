@@ -3,6 +3,11 @@
 ## v0.6.0
 
 - [filesystem] added the menu item `Upload Files...` to easily upload files into a workspace
+- [electron] upgraded version of electron used to version 3.
+
+Breaking changes:
+
+- [node] moved to using Node.js version 10, dropping support for Node.js version 8.
 
 ## v0.5.0
 
