@@ -47,7 +47,7 @@ export class ViewRegistry {
     init() {
         this.applicationStateService.reachedState('ready').then(() => {
             this.showContainers();
-            this.showTreeViewWidgets();
+            setTimeout(() => this.showTreeViewWidgets(), 1000);
         });
     }
 
