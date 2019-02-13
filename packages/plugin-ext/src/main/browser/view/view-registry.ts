@@ -21,6 +21,7 @@ import { FrontendApplicationStateService } from '@theia/core/lib/browser/fronten
 import { Widget } from '@theia/core/lib/browser/widgets/widget';
 import { ViewsContainerWidget } from './views-container-widget';
 import { TreeViewWidget } from './tree-views-main';
+import { Deferred } from '@theia/core/lib/common/promise-util';
 
 export interface ViewContainerRegistry {
     container: ViewContainer;
@@ -41,13 +42,13 @@ export class ViewRegistry {
 
     private containersWidgets: Map<string, ViewsContainerWidget> = new Map<string, ViewsContainerWidget>();
 
-    private treeViewWidgets: Map<string, TreeViewWidget> = new Map<string, TreeViewWidget>();
+    private containersInitialized = new Deferred();
 
     @postConstruct()
     init() {
         this.applicationStateService.reachedState('ready').then(() => {
             this.showContainers();
-            this.showTreeViewWidgets();
+            this.containersInitialized.resolve();
         });
     }
 
@@ -103,12 +104,8 @@ export class ViewRegistry {
         }
     }
 
-    onRegisterTreeView(treeViewid: string, treeViewWidget: TreeViewWidget) {
-        this.treeViewWidgets.set(treeViewid, treeViewWidget);
-    }
-
-    showTreeViewWidgets(): void {
-        this.treeViewWidgets.forEach((treeViewWidget, treeViewId) => {
+    onRegisterTreeView(treeViewId: string, treeViewWidget: TreeViewWidget) {
+        this.containersInitialized.promise.then(() => {
             this.containersWidgets.forEach((viewsContainerWidget, viewsContainerId) => {
                 if (viewsContainerWidget.hasView(treeViewId)) {
                     viewsContainerWidget.addWidget(treeViewId, treeViewWidget);
