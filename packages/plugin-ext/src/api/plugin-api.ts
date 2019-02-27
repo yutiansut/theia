@@ -16,6 +16,7 @@
 
 /* tslint:disable:no-any */
 
+import { Plugin as InternalPlugin } from '../api/plugin-api';
 import { createProxyIdentifier, ProxyIdentifier } from './rpc-protocol';
 import * as theia from '@theia/plugin';
 import { PluginLifecycle, PluginModel, PluginMetadata, PluginPackage } from '../common/plugin-protocol';
@@ -61,6 +62,7 @@ import { IJSONSchema, IJSONSchemaSnippet } from '@theia/core/lib/common/json-sch
 import { DebuggerDescription } from '@theia/debug/lib/common/debug-service';
 import { DebugProtocol } from 'vscode-debugprotocol';
 import { SymbolInformation } from 'vscode-languageserver-types';
+import { ScmCommand } from '@theia/scm/lib/browser';
 
 export interface PluginInitData {
     plugins: PluginMetadata[];
@@ -446,6 +448,87 @@ export interface NotificationExt {
         task: (progress: Progress<{ message?: string; increment?: number }>, token: CancellationToken) => PromiseLike<R>
     ): PromiseLike<R>;
     $onCancel(id: string): void;
+}
+
+export interface ScmExt {
+    createSourceControl(plugin: InternalPlugin, id: string, label: string, rootUri?: theia.Uri): theia.SourceControl;
+    getLastInputBox(plugin: InternalPlugin): theia.SourceControlInputBox | undefined;
+    $executeResourceCommand(sourceControlHandle: number, groupHandle: number, resourceHandle: number): Promise<void>;
+    $provideOriginalResource(sourceControlHandle: number, uri: string, token: CancellationToken): Promise<UriComponents | undefined>;
+}
+
+export interface ScmMain {
+    $registerSourceControl(sourceControlHandle: number, id: string, label: string, rootUri?: string): Promise<void>
+    $updateSourceControl(sourceControlHandle: number, features: SourceControlProviderFeatures): Promise<void>;
+    $unregisterSourceControl(sourceControlHandle: number): Promise<void>;
+
+    $registerGroup(sourceControlHandle: number, groupHandle: number, id: string, label: string): Promise<void>;
+    $updateGroup(sourceControlHandle: number, groupHandle: number, features: SourceControlGroupFeatures): Promise<void>;
+    $updateGroupLabel(sourceControlHandle: number, groupHandle: number, label: string): Promise<void>;
+    $updateResourceState(sourceControlHandle: number, groupHandle: number, resources: SourceControlResourceState[]): Promise<void>;
+    $unregisterGroup(sourceControlHandle: number, groupHandle: number): Promise<void>;
+
+    $setInputBoxValue(sourceControlHandle: number, value: string): Promise<void>;
+    $setInputBoxPlaceholder(sourceControlHandle: number, placeholder: string): Promise<void>;
+}
+
+export interface SourceControlProviderFeatures {
+    hasQuickDiffProvider?: boolean;
+    count?: number;
+    commitTemplate?: string;
+    acceptInputCommand?: ScmCommand;
+    statusBarCommands?: ScmCommand[];
+}
+
+export interface SourceControlGroupFeatures {
+    hideWhenEmpty: boolean | undefined;
+}
+
+export interface SourceControlResourceState {
+    readonly handle: number
+    /**
+     * The uri of the underlying resource inside the workspace.
+     */
+    readonly resourceUri: string;
+
+    /**
+     * The command which should be run when the resource
+     * state is open in the Source Control viewlet.
+     */
+    readonly command?: Command;
+
+    /**
+     * The decorations for this source control
+     * resource state.
+     */
+    readonly decorations?: SourceControlResourceDecorations;
+}
+
+/**
+ * The decorations for a [source control resource state](#SourceControlResourceState).
+ * Can be independently specified for light and dark themes.
+ */
+export interface SourceControlResourceDecorations {
+
+    /**
+     * Whether the source control resource state should be striked-through in the UI.
+     */
+    readonly strikeThrough?: boolean;
+
+    /**
+     * Whether the source control resource state should be faded in the UI.
+     */
+    readonly faded?: boolean;
+
+    /**
+     * The title for a specific source control resource state.
+     */
+    readonly tooltip?: string;
+
+    /**
+     * The icon path for a specific source control resource state.
+     */
+    readonly iconPath?: string;
 }
 
 export interface NotificationMain {
@@ -1008,7 +1091,8 @@ export const PLUGIN_RPC_CONTEXT = {
     STORAGE_MAIN: createProxyIdentifier<StorageMain>('StorageMain'),
     TASKS_MAIN: createProxyIdentifier<TasksMain>('TasksMain'),
     LANGUAGES_CONTRIBUTION_MAIN: createProxyIdentifier<LanguagesContributionMain>('LanguagesContributionMain'),
-    DEBUG_MAIN: createProxyIdentifier<DebugMain>('DebugMain')
+    DEBUG_MAIN: createProxyIdentifier<DebugMain>('DebugMain'),
+    SCM_MAIN: createProxyIdentifier<ScmMain>('ScmMain')
 };
 
 export const MAIN_RPC_CONTEXT = {
@@ -1030,7 +1114,8 @@ export const MAIN_RPC_CONTEXT = {
     STORAGE_EXT: createProxyIdentifier<StorageExt>('StorageExt'),
     TASKS_EXT: createProxyIdentifier<TasksExt>('TasksExt'),
     LANGUAGES_CONTRIBUTION_EXT: createProxyIdentifier<LanguagesContributionExt>('LanguagesContributionExt'),
-    DEBUG_EXT: createProxyIdentifier<DebugExt>('DebugExt')
+    DEBUG_EXT: createProxyIdentifier<DebugExt>('DebugExt'),
+    SCM_EXT: createProxyIdentifier<ScmExt>('ScmExt')
 };
 
 export interface TasksExt {

@@ -105,6 +105,12 @@ declare module '@theia/plugin' {
         value: string;
     }
 
+    export interface SourceControlResourceDecorations {
+        source?: string;
+        letter?: string;
+        color?: ThemeColor;
+    }
+
     /**
      * Enumeration of the supported operating systems.
      */
