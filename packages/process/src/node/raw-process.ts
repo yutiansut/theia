@@ -107,10 +107,10 @@ export class RawProcess extends Process {
 
             this.process.on('error', (error: NodeJS.ErrnoException) => {
                 this.emitOnError({
-                    code: error.code || 'Unknown error',
+                    code: error.code || 'Unknown Error',
                 });
             });
-            this.process.on('exit', (exitCode: number, signal: string) => {
+            this.process.on('exit', (exitCode: number | null, signal: string | null) => {
                 // node's child_process exit sets the unused parameter to null,
                 // but we want it to be undefined instead.
                 this.emitOnExit(
