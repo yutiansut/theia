@@ -45,6 +45,7 @@ export const cppPreferencesSchema: PreferenceSchema = {
                 },
                 required: ['name', 'directory'],
             },
+            scope: 'resource',
             default: [],
         },
         'cpp.experimentalCommands': {
