@@ -59,6 +59,9 @@ import { DebugService } from '@theia/debug/lib/common/debug-service';
 import { PluginSharedStyle } from './plugin-shared-style';
 import { FSResourceResolver } from './file-system-main';
 import { SelectionProviderCommandContribution } from './selection-provider-command';
+import { NavigatorTreeDecorator } from '@theia/navigator/lib/browser';
+import { Decorator } from './decorations/decorator';
+import { DecoratorEmitter } from './decorations/decorator-emitter';
 
 export default new ContainerModule((bind, unbind, isBound, rebind) => {
     bindHostedPluginPreferences(bind);
@@ -139,4 +142,7 @@ export default new ContainerModule((bind, unbind, isBound, rebind) => {
     rebind(DebugService).toService(PluginDebugService);
     bind(PluginDebugSessionContributionRegistry).toSelf().inSingletonScope();
     rebind(DebugSessionContributionRegistry).toService(PluginDebugSessionContributionRegistry);
+
+    bind(NavigatorTreeDecorator).to(Decorator).inSingletonScope();
+    bind(DecoratorEmitter).toSelf().inSingletonScope();
 });
