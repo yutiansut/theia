@@ -17,10 +17,7 @@
     "access": "public"
   },
   "theiaExtensions": [
-    {
-      "frontend": "lib/browser/cpp-frontend-module",
-      "backend": "lib/node/cpp-backend-module"
-    }
+    {}
   ],
   "keywords": [
     "theia-extension"
