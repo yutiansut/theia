@@ -29,10 +29,15 @@ import { TaskServer, taskPath } from '../common/task-protocol';
 import { TaskWatcher } from '../common/task-watcher';
 import { bindProcessTaskModule } from './process/process-task-frontend-module';
 import { TaskSchemaUpdater } from './task-schema-updater';
+import { TaskActionProvider, ConfigureTaskAction } from './task-action';
+import { NoActionProvider } from '@theia/core/lib/browser/quick-open/quick-open-action';
 
 export default new ContainerModule(bind => {
     bind(TaskFrontendContribution).toSelf().inSingletonScope();
     bind(TaskService).toSelf().inSingletonScope();
+    bind(TaskActionProvider).toSelf().inSingletonScope();
+    bind(NoActionProvider).toSelf().inSingletonScope();
+    bind(ConfigureTaskAction).toSelf().inSingletonScope();
 
     for (const identifier of [FrontendApplicationContribution, CommandContribution, KeybindingContribution, MenuContribution, QuickOpenContribution]) {
         bind(identifier).toService(TaskFrontendContribution);

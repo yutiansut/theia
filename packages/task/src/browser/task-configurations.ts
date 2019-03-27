@@ -16,13 +16,15 @@
 
 import { inject, injectable } from 'inversify';
 import { TaskConfiguration } from '../common/task-protocol';
-import { Disposable, DisposableCollection } from '@theia/core/lib/common';
+import { Disposable, DisposableCollection, ResourceProvider } from '@theia/core/lib/common';
 import URI from '@theia/core/lib/common/uri';
 import { FileSystemWatcher, FileChangeEvent } from '@theia/filesystem/lib/browser/filesystem-watcher';
 import { FileChange, FileChangeType } from '@theia/filesystem/lib/common/filesystem-watcher-protocol';
 import { FileSystem } from '@theia/filesystem/lib/common';
 import * as jsoncparser from 'jsonc-parser';
 import { ParseError } from 'jsonc-parser';
+import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { open, OpenerService } from '@theia/core/lib/browser';
 
 export interface TaskConfigurationClient {
     /**
@@ -56,7 +58,11 @@ export class TaskConfigurations implements Disposable {
 
     constructor(
         @inject(FileSystemWatcher) protected readonly watcherServer: FileSystemWatcher,
-        @inject(FileSystem) protected readonly fileSystem: FileSystem
+        @inject(FileSystem) protected readonly fileSystem: FileSystem,
+        @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService,
+        @inject(ResourceProvider) protected readonly resourceProvider: ResourceProvider,
+        @inject(OpenerService) protected readonly openerService: OpenerService,
+        @inject(FileSystem) protected readonly filesystem: FileSystem
     ) {
         this.toDispose.push(watcherServer);
         this.watcherServer.onFilesChanged(async changes => {
@@ -227,6 +233,43 @@ export class TaskConfigurations implements Disposable {
             } catch (err) {
                 console.error(`Error(s) reading config file: ${uri}`);
             }
+        }
+    }
+
+    /** Adds given task to a config file and opens the file to provide ability to edit task configuration. */
+    async configure(task: TaskConfiguration): Promise<void> {
+        const workspace = this.workspaceService.workspace;
+        if (!workspace) {
+            return;
+        }
+
+        const tasks = this.getTasks();
+        tasks.push(task);
+
+        const configFileUri = this.getConfigFileUri(workspace.uri);
+        await this.saveTasks(configFileUri, tasks);
+
+        try {
+            await open(this.openerService, new URI(configFileUri));
+        } catch (e) {
+            console.error(`Error occurred while opening: ${this.TASKFILE}.`, e);
+        }
+    }
+
+    /** Writes the tasks to a config file. Creates a config file if this one does not exist */
+    async saveTasks(configFileUri: string, tasks: TaskConfiguration[]): Promise<void> {
+        if (configFileUri && !await this.filesystem.exists(configFileUri)) {
+            await this.filesystem.createFile(configFileUri);
+        }
+
+        const preparedTasks = this.filterDuplicates(tasks).map(task => {
+            const { _source, $ident, ...preparedTask } = task;
+            return preparedTask;
+        });
+
+        const resource = await this.resourceProvider(new URI(configFileUri));
+        if (resource.saveContents) {
+            await resource.saveContents(JSON.stringify({ tasks: preparedTasks }, undefined, 4));
         }
     }
 
