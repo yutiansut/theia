@@ -24,13 +24,13 @@ import { TaskInfo, TaskConfiguration } from '../common/task-protocol';
 import { TaskConfigurations } from './task-configurations';
 import URI from '@theia/core/lib/common/uri';
 import { TaskActionProvider } from './task-action';
-import { QuickOpenActionProvider, NoActionProvider } from '@theia/core/lib/browser/quick-open/quick-open-action';
+import { QuickOpenActionProvider } from '@theia/core/lib/browser/quick-open/quick-open-action';
 
 @injectable()
 export class QuickOpenTask implements QuickOpenModel, QuickOpenHandler {
 
     protected items: QuickOpenItem[];
-    protected actionProvider: QuickOpenActionProvider;
+    protected actionProvider: QuickOpenActionProvider | undefined;
 
     readonly prefix: string = 'task ';
 
@@ -44,9 +44,6 @@ export class QuickOpenTask implements QuickOpenModel, QuickOpenHandler {
 
     @inject(TaskActionProvider)
     protected readonly taskActionProvider: TaskActionProvider;
-
-    @inject(NoActionProvider)
-    protected readonly noActionProvider: NoActionProvider;
 
     /**
      * @deprecated To be removed in 0.5.0
@@ -72,7 +69,7 @@ export class QuickOpenTask implements QuickOpenModel, QuickOpenHandler {
             ...filteredProvidedTasks.map((t, ind) => new TaskRunQuickOpenItem(t, this.taskService, false, ind === 0 ? 'provided' : undefined))
         );
 
-        this.actionProvider = this.items.length ? this.taskActionProvider : this.noActionProvider;
+        this.actionProvider = this.items.length ? this.taskActionProvider : undefined;
 
         if (!this.items.length) {
             this.items.push(new QuickOpenItem({
@@ -104,7 +101,7 @@ export class QuickOpenTask implements QuickOpenModel, QuickOpenHandler {
 
     attach(): void {
         this.items = [];
-        this.actionProvider = this.noActionProvider;
+        this.actionProvider = undefined;
 
         this.taskService.getRunningTasks().then(tasks => {
             if (!tasks.length) {
@@ -135,7 +132,7 @@ export class QuickOpenTask implements QuickOpenModel, QuickOpenHandler {
 
     async configure(): Promise<void> {
         this.items = [];
-        this.actionProvider = this.noActionProvider;
+        this.actionProvider = undefined;
 
         const providedTasks = await this.taskService.getProvidedTasks();
         if (!providedTasks.length) {

@@ -37,16 +37,6 @@ export interface QuickOpenActionProvider {
 }
 
 @injectable()
-export class NoActionProvider implements QuickOpenActionProvider {
-    hasActions(): boolean {
-        return false;
-    }
-    async getActions(): Promise<QuickOpenAction[]> {
-        return [];
-    }
-}
-
-@injectable()
 export abstract class QuickOpenBaseAction implements QuickOpenAction {
     protected actionId: string;
     protected actionLabel: string;
