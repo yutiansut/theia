@@ -17,7 +17,16 @@
 import { ContainerModule } from 'inversify';
 import { LanguageServerContribution } from '@theia/languages/lib/node';
 import { CppContribution } from './cpp-contribution';
+import { CppBuildConfigurationServer, cppBuildConfigurationServerPath } from '../common/cpp-build-configuration-protocol';
+import { CppBuildConfigurationServerImpl } from './cpp-build-configuration-server';
+import { JsonRpcConnectionHandler, ConnectionHandler } from '@theia/core/lib/common';
 
 export default new ContainerModule(bind => {
     bind(LanguageServerContribution).to(CppContribution).inSingletonScope();
+
+    bind(CppBuildConfigurationServerImpl).toSelf().inSingletonScope();
+    bind(ConnectionHandler).toDynamicValue(ctx =>
+        new JsonRpcConnectionHandler<CppBuildConfigurationServer>(cppBuildConfigurationServerPath, () =>
+            ctx.container.get<CppBuildConfigurationServer>(CppBuildConfigurationServerImpl))
+    ).inSingletonScope();
 });

@@ -20,10 +20,12 @@ import { QuickOpenService } from '@theia/core/lib/browser/quick-open/quick-open-
 import { FileSystem } from '@theia/filesystem/lib/common';
 import URI from '@theia/core/lib/common/uri';
 import { PreferenceScope, PreferenceService } from '@theia/preferences/lib/browser';
-import { CppBuildConfigurationManager, CppBuildConfiguration, CPP_BUILD_CONFIGURATIONS_PREFERENCE_KEY, isCppBuildConfiguration, equals } from './cpp-build-configurations';
+import { CppBuildConfigurationManager, CPP_BUILD_CONFIGURATIONS_PREFERENCE_KEY, isCppBuildConfiguration, equals } from './cpp-build-configurations';
 import { EditorManager } from '@theia/editor/lib/browser';
-import { CommonCommands, QuickPickService, LabelProvider, QuickPickItem } from '@theia/core/lib/browser';
+import { CommonCommands, LabelProvider } from '@theia/core/lib/browser';
+import { QuickPickService, QuickPickItem } from '@theia/core/lib/common/quick-pick-service';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { CppBuildConfiguration } from '../common/cpp-build-configuration-protocol';
 
 @injectable()
 export class CppBuildConfigurationChanger {

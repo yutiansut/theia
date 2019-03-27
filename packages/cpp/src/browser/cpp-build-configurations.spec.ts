@@ -23,12 +23,13 @@ import { FileSystem } from '@theia/filesystem/lib/common';
 import { StorageService } from '@theia/core/lib/browser/storage-service';
 import { MockStorageService } from '@theia/core/lib/browser/test/mock-storage-service';
 import sinon = require('sinon');
-import { CppBuildConfigurationManager, CppBuildConfiguration, CppBuildConfigurationManagerImpl } from './cpp-build-configurations';
+import { CppBuildConfigurationManager, CppBuildConfigurationManagerImpl } from './cpp-build-configurations';
 import { FileSystemNode } from '@theia/filesystem/lib/node/node-filesystem';
 import { bindCppPreferences } from './cpp-preferences';
 import { PreferenceService } from '@theia/core/lib/browser/preferences/preference-service';
 import { MockPreferenceService } from '@theia/core/lib/browser/preferences/test/mock-preference-service';
 import { WorkspaceService } from '@theia/workspace/lib/browser/workspace-service';
+import { CppBuildConfiguration } from '../common/cpp-build-configuration-protocol';
 
 let container: Container;
 

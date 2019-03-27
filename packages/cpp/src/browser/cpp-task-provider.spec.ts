@@ -17,11 +17,12 @@
 import { Container, injectable } from 'inversify';
 import { CppTaskProvider } from './cpp-task-provider';
 import { TaskResolverRegistry } from '@theia/task/lib/browser/task-contribution';
-import { CppBuildConfigurationManager, CppBuildConfiguration } from './cpp-build-configurations';
+import { CppBuildConfigurationManager } from './cpp-build-configurations';
 import { Event } from '@theia/core';
 import { expect } from 'chai';
 import { TaskConfiguration } from '@theia/task/lib/common';
 import { ProcessTaskConfiguration } from '@theia/task/lib/common/process/task-protocol';
+import { CppBuildConfiguration } from '../common/cpp-build-configuration-protocol';
 
 // The object under test.
 let taskProvider: CppTaskProvider;
@@ -55,6 +56,9 @@ class MockCppBuildConfigurationManager implements CppBuildConfigurationManager {
 
     /** Event emitted when the active build configuration changes.  */
     onActiveConfigChange: Event<CppBuildConfiguration | undefined>;
+
+    /** Event emitted when an active build configuration changes.  */
+    onActiveConfigChange2: Event<Map<string, CppBuildConfiguration>>;
 
     /**
      * Promise resolved when the list of build configurations has been read

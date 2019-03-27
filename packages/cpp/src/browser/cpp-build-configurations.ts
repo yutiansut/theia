@@ -19,29 +19,12 @@ import { Emitter, Event } from '@theia/core';
 import { CppPreferences } from './cpp-preferences';
 import { StorageService } from '@theia/core/lib/browser/storage-service';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { CppBuildConfiguration, CppBuildConfigurationServer } from '../common/cpp-build-configuration-protocol';
 
 /**
- * Representation of a cpp build configuration.
+ * @deprecated Import from `@theia/cpp/lib/common` instead
  */
-export interface CppBuildConfiguration {
-
-    /**
-     * The human-readable build configuration name.
-     */
-    name: string;
-
-    /**
-     * The base directory of the build configuration.
-     */
-    directory: string;
-
-    /**
-     * The list of commands for the build configuration.
-     */
-    commands?: {
-        'build'?: string
-    };
-}
+export { CppBuildConfiguration };
 
 // tslint:disable-next-line:no-any
 export function isCppBuildConfiguration(arg: any): arg is CppBuildConfiguration {
@@ -103,11 +86,32 @@ export interface CppBuildConfigurationManager {
     getAllActiveConfigs?(): Map<string, CppBuildConfiguration | undefined>;
 
     /**
+     * Experimental:
+     *
+     * Get a filesystem path to a `compile_commands.json` file which will be the result of all
+     * configurations merged together (provided through the `configs` parameter).
+     *
+     * This covers the case when `clangd` is not able to take multiple compilation database
+     * in its initialization, so this is mostly a hack-around to still get diagnostics for all
+     * projects and most importantly being able to cross reference project symbols.
+     */
+    getMergedCompilationDatabase?(configs: { configurations: CppBuildConfiguration[] }): Promise<string>;
+
+    /**
+     * @deprecated use `onActiveConfigChange2` instead.
+     *
      * Event emitted when the active build configuration changes.
      *
      * @returns an event with the active `CppBuildConfiguration` if it exists, else `undefined`.
      */
     onActiveConfigChange: Event<CppBuildConfiguration | undefined>;
+
+    /**
+     * Updated `onActiveConfigChange` to support multi-root.
+     *
+     * @returns all the configurations to use.
+     */
+    onActiveConfigChange2: Event<Map<string, CppBuildConfiguration>>;
 
     /**
      * Promise resolved when the list of build configurations has been read
@@ -134,6 +138,9 @@ export class CppBuildConfigurationManagerImpl implements CppBuildConfigurationMa
     @inject(WorkspaceService)
     protected readonly workspaceService: WorkspaceService;
 
+    @inject(CppBuildConfigurationServer)
+    protected readonly buildConfigurationServer: CppBuildConfigurationServer;
+
     /**
      * The current active build configurations map.
      */
@@ -141,9 +148,16 @@ export class CppBuildConfigurationManagerImpl implements CppBuildConfigurationMa
         = new Map<string, CppBuildConfiguration | undefined>();
 
     /**
+     * @deprecated use `activeConfigChange2Emitter` instead.
+     *
      * Emitter for when the active build configuration changes.
      */
     protected readonly activeConfigChangeEmitter = new Emitter<CppBuildConfiguration | undefined>();
+
+    /**
+     * Emitter for when an active build configuration changes.
+     */
+    protected readonly activeConfigChange2Emitter = new Emitter<Map<string, CppBuildConfiguration>>();
 
     /**
      * Persistent storage key for the active build configurations map.
@@ -229,11 +243,24 @@ export class CppBuildConfigurationManagerImpl implements CppBuildConfigurationMa
         const workspaceRoot = root ? root : this.workspaceService.tryGetRoots()[0].uri;
         this.activeConfigs.set(workspaceRoot, config);
         this.saveActiveConfiguration(this.activeConfigs);
+
+        const activeConfigurations = new Map<string, CppBuildConfiguration>();
+        for (const [source, cppConfig] of this.getAllActiveConfigs()) {
+            if (typeof cppConfig !== 'undefined') {
+                activeConfigurations.set(source, cppConfig);
+            }
+        }
+
+        this.activeConfigChange2Emitter.fire(activeConfigurations);
         this.activeConfigChangeEmitter.fire(config);
     }
 
     get onActiveConfigChange(): Event<CppBuildConfiguration | undefined> {
         return this.activeConfigChangeEmitter.event;
+    }
+
+    get onActiveConfigChange2(): Event<Map<string, CppBuildConfiguration>> {
+        return this.activeConfigChange2Emitter.event;
     }
 
     getConfigs(root?: string): CppBuildConfiguration[] {
@@ -247,5 +274,12 @@ export class CppBuildConfigurationManagerImpl implements CppBuildConfigurationMa
         return Array.from(this.getConfigs(root))
             .filter(a => a.name !== '' && a.directory !== '')
             .sort((a, b) => (a.name.localeCompare(b.name)));
+    }
+
+    /**
+     * @todo Optimize by caching the merge result, based on the `CppBuildConfiguration.directory` field?
+     */
+    async getMergedCompilationDatabase(params: { configurations: CppBuildConfiguration[] }): Promise<string> {
+        return this.buildConfigurationServer.getMergedCompilationDatabase(params);
     }
 }

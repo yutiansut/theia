@@ -40,7 +40,7 @@ export class CppBuildConfigurationsStatusBarElement {
      */
     show(): void {
         this.setCppBuildConfigElement(this.getValidActiveCount());
-        this.cppManager.onActiveConfigChange(() => this.setCppBuildConfigElement(this.getValidActiveCount()));
+        this.cppManager.onActiveConfigChange2(configs => this.setCppBuildConfigElement(configs.size));
     }
 
     /**
