@@ -76,6 +76,7 @@ export class GitHistoryWidget extends GitNavigableListWidget<GitHistoryListNode>
         this.title.label = GIT_HISTORY_LABEL;
         this.title.caption = GIT_HISTORY_LABEL;
         this.title.iconClass = 'fa git-history-tab-icon';
+        this.title.closable = true;
         this.addClass('theia-git');
         this.resetState();
         this.cancelIndicator = new CancellationTokenSource();
@@ -186,7 +187,7 @@ export class GitHistoryWidget extends GitNavigableListWidget<GitHistoryListNode>
         if (commit.expanded) {
             this.removeFileChangeNodes(commit, id);
         } else {
-            this.addFileChangeNodes(commit, id);
+            await this.addFileChangeNodes(commit, id);
         }
         commit.expanded = !commit.expanded;
         this.update();
@@ -340,7 +341,6 @@ export class GitHistoryWidget extends GitNavigableListWidget<GitHistoryListNode>
                 e => {
                     if (commit.selected && !this.singleFileMode) {
                         this.addOrRemoveFileChangeNodes(commit);
-                        this.update();
                     } else {
                         this.selectNode(commit);
                     }
