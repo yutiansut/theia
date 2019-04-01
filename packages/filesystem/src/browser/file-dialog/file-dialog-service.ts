@@ -74,7 +74,7 @@ export class DefaultFileDialogService {
     protected async getRootNode(folderToOpen?: FileStat): Promise<DirNode | undefined> {
         const folder = folderToOpen || await this.fileSystem.getCurrentUserHome();
         if (folder) {
-            const rootUri = new URI(folder.uri).parent;
+            const rootUri = new URI(folder.uri);
             const name = this.labelProvider.getName(rootUri);
             const [rootStat, label] = await Promise.all([
                 this.fileSystem.getFileStat(rootUri.toString()),
