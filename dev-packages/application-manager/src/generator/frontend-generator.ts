@@ -132,6 +132,7 @@ const applicationName = \`${this.pck.props.frontend.config.applicationName}\`;
 
 if (isMaster) {
 
+    const nativeKeymap = require('native-keymap');
     const Storage = require('electron-store');
     const electronStore = new Storage();
 
@@ -213,6 +214,17 @@ if (isMaster) {
             newWindow.on('close', saveWindowState);
             newWindow.on('resize', saveWindowStateDelayed);
             newWindow.on('move', saveWindowStateDelayed);
+
+            // Notify the renderer process on keyboard layout change
+            nativeKeymap.onDidChangeKeyboardLayout(() => {
+                if (!newWindow.isDestroyed()) {
+                    const newLayout = {
+                        info: nativeKeymap.getCurrentKeyboardLayout(),
+                        mapping: nativeKeymap.getKeyMap()
+                    };
+                    newWindow.webContents.send('keyboardLayoutChanged', newLayout);
+                }
+            });
 
             if (!!theUrl) {
                 newWindow.loadURL(theUrl);
