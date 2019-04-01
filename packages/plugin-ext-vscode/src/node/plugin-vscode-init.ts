@@ -72,7 +72,7 @@ export const doInitialization: BackendInitializationFn = (apiFactory: PluginAPIF
     };
 
     // override the version for vscode to be a VSCode version
-    (<any>vscode).version = '1.32.3';
+    (<any>vscode).version = process.env['VSCODE_API_VERSION'] || '1.32.3';
 
     pluginsApiImpl.set(plugin.model.id, vscode);
     plugins.push(plugin);
