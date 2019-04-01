@@ -16,7 +16,7 @@
 
 import URI from '../../common/uri';
 import { Keybinding } from '../keybinding';
-import { QuickOpenActionProvider } from './quick-open-action';
+import { QuickOpenActionProvider } from './quick-open-action-provider';
 
 export interface Highlight {
     start: number

@@ -17,14 +17,13 @@
 import { inject, injectable } from 'inversify';
 import {
     QuickOpenService, QuickOpenModel, QuickOpenItem,
-    QuickOpenGroupItem, QuickOpenMode, QuickOpenHandler, QuickOpenOptions
+    QuickOpenGroupItem, QuickOpenMode, QuickOpenHandler, QuickOpenOptions, QuickOpenActionProvider
 } from '@theia/core/lib/browser/quick-open/';
 import { TaskService } from './task-service';
 import { TaskInfo, TaskConfiguration } from '../common/task-protocol';
 import { TaskConfigurations } from './task-configurations';
 import URI from '@theia/core/lib/common/uri';
-import { TaskActionProvider } from './task-action';
-import { QuickOpenActionProvider } from '@theia/core/lib/browser/quick-open/quick-open-action';
+import { TaskActionProvider } from './task-action-provider';
 
 @injectable()
 export class QuickOpenTask implements QuickOpenModel, QuickOpenHandler {
@@ -65,8 +64,8 @@ export class QuickOpenTask implements QuickOpenModel, QuickOpenHandler {
 
         this.items = [];
         this.items.push(
-            ...configuredTasks.map((t, ind) => new TaskRunQuickOpenItem(t, this.taskService, true, ind === 0 ? 'configured' : undefined)),
-            ...filteredProvidedTasks.map((t, ind) => new TaskRunQuickOpenItem(t, this.taskService, false, ind === 0 ? 'provided' : undefined))
+            ...configuredTasks.map((t, ind) => new TaskRunQuickOpenItem(t, this.taskService, true, ind === 0 ? 'configured tasks' : undefined)),
+            ...filteredProvidedTasks.map((t, ind) => new TaskRunQuickOpenItem(t, this.taskService, false, ind === 0 ? 'detected tasks' : undefined))
         );
 
         this.actionProvider = this.items.length ? this.taskActionProvider : undefined;
@@ -82,7 +81,7 @@ export class QuickOpenTask implements QuickOpenModel, QuickOpenHandler {
     async open(): Promise<void> {
         await this.init();
         this.quickOpenService.open(this, {
-            placeholder: 'Type the name of a task you want to execute',
+            placeholder: 'Select the task to run',
             fuzzyMatchLabel: true,
             fuzzySort: false
         });
@@ -147,7 +146,7 @@ export class QuickOpenTask implements QuickOpenModel, QuickOpenHandler {
         });
 
         this.quickOpenService.open(this, {
-            placeholder: 'Choose task to configure',
+            placeholder: 'Select a task to configure',
             fuzzyMatchLabel: true,
             fuzzySort: true
         });

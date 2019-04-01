@@ -142,7 +142,6 @@ export class TaskFrontendContribution implements CommandContribution, MenuContri
         registry.registerCommand(
             TaskCommands.TASK_CONFIGURE,
             {
-                isEnabled: () => true,
                 execute: () => this.quickOpenTask.configure()
             }
         );

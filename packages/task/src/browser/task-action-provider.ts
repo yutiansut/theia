@@ -16,7 +16,9 @@
 
 import { injectable, inject } from 'inversify';
 import { TaskService } from './task-service';
-import { QuickOpenBaseAction, QuickOpenActionProvider, QuickOpenAction } from '@theia/core/lib/browser/quick-open/quick-open-action';
+import { TaskRunQuickOpenItem } from './quick-open-task';
+import { QuickOpenBaseAction, QuickOpenItem, QuickOpenActionProvider, QuickOpenAction } from '@theia/core/lib/browser/quick-open';
+import { ThemeService } from '@theia/core/lib/browser/theming';
 
 @injectable()
 export class ConfigureTaskAction extends QuickOpenBaseAction {
@@ -25,13 +27,25 @@ export class ConfigureTaskAction extends QuickOpenBaseAction {
     protected readonly taskService: TaskService;
 
     constructor() {
-        super('configure:task', '', 'fa fa-cog');
+        super({ id: 'configure:task' });
+
+        this.updateTheme();
+
+        ThemeService.get().onThemeChange(() => this.updateTheme());
     }
 
-    // tslint:disable-next-line:no-any
-    async run(event?: any): Promise<void> {
-        if (event && event.item && event.item.getTask) {
-            this.taskService.configure(event.item.getTask());
+    async run(item?: QuickOpenItem): Promise<void> {
+        if (item instanceof TaskRunQuickOpenItem) {
+            this.taskService.configure(item.getTask());
+        }
+    }
+
+    protected updateTheme(): void {
+        const theme = ThemeService.get().getCurrentTheme().id;
+        if (theme === 'dark') {
+            this.class = 'quick-open-task-configure-dark';
+        } else if (theme === 'light') {
+            this.class = 'quick-open-task-configure-bright';
         }
     }
 }

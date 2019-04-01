@@ -18,12 +18,11 @@ import { injectable, inject, postConstruct } from 'inversify';
 import { MessageType } from '@theia/core/lib/common/message-service-protocol';
 import {
     QuickOpenService, QuickOpenModel, QuickOpenOptions, QuickOpenItem,
-    QuickOpenGroupItem, QuickOpenMode, KeySequence
+    QuickOpenGroupItem, QuickOpenMode, KeySequence, QuickOpenActionProvider, QuickOpenAction
 } from '@theia/core/lib/browser';
 import { KEY_CODE_MAP } from './monaco-keycode-map';
 import { ContextKey } from '@theia/core/lib/browser/context-key-service';
 import { MonacoContextKeyService } from './monaco-context-key-service';
-import { QuickOpenActionProvider } from '@theia/core/lib/browser/quick-open/quick-open-action';
 
 export interface MonacoQuickOpenControllerOpts extends monaco.quickOpen.IQuickOpenControllerOpts {
     readonly prefix?: string;
@@ -410,17 +409,60 @@ export class QuickOpenEntryGroup extends monaco.quickOpen.QuickOpenEntryGroup {
 
 }
 
+export class MonacoQuickOpenAction implements monaco.quickOpen.IAction {
+    constructor(public readonly action: QuickOpenAction) { }
+
+    get id(): string {
+        return this.action.id;
+    }
+
+    get label(): string {
+        return this.action.label || '';
+    }
+
+    get tooltip(): string {
+        return this.action.tooltip || '';
+    }
+
+    get class(): string | undefined {
+        return this.action.class;
+    }
+
+    get enabled(): boolean {
+        return this.action.enabled || true;
+    }
+
+    get checked(): boolean {
+        return this.action.checked || false;
+    }
+
+    get radio(): boolean {
+        return this.action.radio || false;
+    }
+
+    // tslint:disable-next-line:no-any
+    run(entry: QuickOpenEntry | QuickOpenEntryGroup): PromiseLike<any> {
+        return this.action.run(entry.item);
+    }
+
+    dispose(): void {
+        this.action.dispose();
+    }
+}
+
 export class MonacoQuickOpenActionProvider implements monaco.quickOpen.IActionProvider {
     constructor(public readonly provider: QuickOpenActionProvider) { }
 
     // tslint:disable-next-line:no-any
-    hasActions(element: any, item: any): boolean {
-        return this.provider.hasActions(item);
+    hasActions(element: any, entry: QuickOpenEntry | QuickOpenEntryGroup): boolean {
+        return this.provider.hasActions(entry.item);
     }
 
     // tslint:disable-next-line:no-any
-    getActions(element: any, item: any): monaco.Promise<monaco.quickOpen.IAction[]> {
-        return monaco.Promise.wrap(this.provider.getActions(item));
+    async getActions(element: any, entry: QuickOpenEntry | QuickOpenEntryGroup): monaco.Promise<monaco.quickOpen.IAction[]> {
+        const actions = await this.provider.getActions(entry.item);
+        const monacoActions = actions.map(action => new MonacoQuickOpenAction(action));
+        return monaco.Promise.wrap(monacoActions);
     }
 
     hasSecondaryActions(): boolean {

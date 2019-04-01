@@ -56,13 +56,18 @@ export class TaskConfigurations implements Disposable {
 
     protected client: TaskConfigurationClient | undefined = undefined;
 
+    @inject(WorkspaceService)
+    protected readonly workspaceService: WorkspaceService;
+
+    @inject(ResourceProvider)
+    protected readonly resourceProvider: ResourceProvider;
+
+    @inject(OpenerService)
+    protected readonly openerService: OpenerService;
+
     constructor(
         @inject(FileSystemWatcher) protected readonly watcherServer: FileSystemWatcher,
-        @inject(FileSystem) protected readonly fileSystem: FileSystem,
-        @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService,
-        @inject(ResourceProvider) protected readonly resourceProvider: ResourceProvider,
-        @inject(OpenerService) protected readonly openerService: OpenerService,
-        @inject(FileSystem) protected readonly filesystem: FileSystem
+        @inject(FileSystem) protected readonly fileSystem: FileSystem
     ) {
         this.toDispose.push(watcherServer);
         this.watcherServer.onFilesChanged(async changes => {
@@ -258,8 +263,8 @@ export class TaskConfigurations implements Disposable {
 
     /** Writes the tasks to a config file. Creates a config file if this one does not exist */
     async saveTasks(configFileUri: string, tasks: TaskConfiguration[]): Promise<void> {
-        if (configFileUri && !await this.filesystem.exists(configFileUri)) {
-            await this.filesystem.createFile(configFileUri);
+        if (configFileUri && !await this.fileSystem.exists(configFileUri)) {
+            await this.fileSystem.createFile(configFileUri);
         }
 
         const preparedTasks = this.filterDuplicates(tasks).map(task => {

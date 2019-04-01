@@ -15,98 +15,83 @@
  ********************************************************************************/
 
 import { Disposable } from '../../common/disposable';
-import { injectable, unmanaged } from 'inversify';
-
-export interface QuickOpenAction extends Disposable {
-    id: string;
-    label: string;
-    tooltip: string;
-    class: string | undefined;
-    enabled: boolean;
-    checked: boolean;
-    radio: boolean;
-    // tslint:disable-next-line:no-any
-    run(event?: any): PromiseLike<any>;
-}
+import { injectable } from 'inversify';
+import { QuickOpenItem } from './quick-open-model';
 
 export interface QuickOpenActionProvider {
-    // tslint:disable-next-line:no-any
-    hasActions(item: any): boolean;
-    // tslint:disable-next-line:no-any
-    getActions(item: any): Promise<QuickOpenAction[]>;
+    hasActions(item: QuickOpenItem): boolean;
+    getActions(item: QuickOpenItem): Promise<QuickOpenAction[]>;
+}
+
+export interface QuickOpenActionOptions {
+    id: string;
+    label?: string;
+    tooltip?: string;
+    class?: string | undefined;
+    enabled?: boolean;
+    checked?: boolean;
+    radio?: boolean;
+}
+
+export interface QuickOpenAction extends QuickOpenActionOptions, Disposable {
+    run(item?: QuickOpenItem): PromiseLike<void>;
 }
 
 @injectable()
 export abstract class QuickOpenBaseAction implements QuickOpenAction {
-    protected actionId: string;
-    protected actionLabel: string;
-    protected actionTooltip: string;
-    protected actionCssClass: string | undefined;
-    protected actionEnabled: boolean;
-    protected actionChecked: boolean;
-    protected actionRadio: boolean;
-
-    constructor(
-        @unmanaged() id: string,
-        @unmanaged() label: string = '',
-        @unmanaged() cssClass: string = '',
-        @unmanaged() enabled: boolean = true) {
-        this.actionId = id;
-        this.actionLabel = label;
-        this.actionCssClass = cssClass;
-        this.actionEnabled = enabled;
+    constructor(protected options: QuickOpenActionOptions) {
     }
 
     get id(): string {
-        return this.actionId;
+        return this.options.id;
     }
 
     get label(): string {
-        return this.actionLabel;
+        return this.options.label || '';
     }
 
     set label(value: string) {
-        this.actionLabel = value;
+        this.options.label = value;
     }
 
     get tooltip(): string {
-        return this.actionTooltip;
+        return this.options.tooltip || '';
     }
 
     set tooltip(value: string) {
-        this.tooltip = value;
+        this.options.tooltip = value;
     }
 
     get class(): string | undefined {
-        return this.actionCssClass;
+        return this.options.class || '';
     }
 
     set class(value: string | undefined) {
-        this.actionCssClass = value;
+        this.options.class = value;
     }
 
     get enabled(): boolean {
-        return this.actionEnabled;
+        return this.options.enabled || true;
     }
 
     set enabled(value: boolean) {
-        this.actionEnabled = value;
+        this.options.enabled = value;
     }
 
     get checked(): boolean {
-        return this.actionChecked;
+        return this.options.checked || false;
     }
 
     set checked(value: boolean) {
-        this.actionChecked = value;
+        this.options.checked = value;
     }
 
     get radio(): boolean {
-        return this.actionRadio;
+        return this.options.radio || false;
     }
 
     set radio(value: boolean) {
-        this.actionRadio = value;
+        this.options.radio = value;
     }
 
     // tslint:disable-next-line:no-any
