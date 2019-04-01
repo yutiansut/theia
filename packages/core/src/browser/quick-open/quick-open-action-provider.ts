@@ -94,8 +94,7 @@ export abstract class QuickOpenBaseAction implements QuickOpenAction {
         this.options.radio = value;
     }
 
-    // tslint:disable-next-line:no-any
-    abstract run(event?: any): PromiseLike<any>;
+    abstract run(item?: QuickOpenItem): PromiseLike<void>;
 
     dispose(): void { }
 }
