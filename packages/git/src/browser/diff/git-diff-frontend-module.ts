@@ -18,10 +18,11 @@ import { interfaces } from 'inversify';
 import { GitDiffContribution } from './git-diff-contribution';
 import { WidgetFactory, bindViewContribution } from '@theia/core/lib/browser';
 import { GitDiffWidget, GIT_DIFF } from './git-diff-widget';
+import { TabBarToolbarContribution } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 
 import '../../../src/browser/style/diff.css';
 
-export function bindGitDiffModule(bind: interfaces.Bind) {
+export function bindGitDiffModule(bind: interfaces.Bind): void {
 
     bind(GitDiffWidget).toSelf();
     bind(WidgetFactory).toDynamicValue(ctx => ({
@@ -30,5 +31,6 @@ export function bindGitDiffModule(bind: interfaces.Bind) {
     }));
 
     bindViewContribution(bind, GitDiffContribution);
+    bind(TabBarToolbarContribution).toService(GitDiffContribution);
 
 }

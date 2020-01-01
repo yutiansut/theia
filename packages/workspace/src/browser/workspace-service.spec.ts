@@ -23,7 +23,8 @@ import { FileSystem, FileStat } from '@theia/filesystem/lib/common';
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
 import { FileSystemNode } from '@theia/filesystem/lib/node/node-filesystem';
 import { FileSystemWatcher, FileChangeEvent, FileChangeType } from '@theia/filesystem/lib/browser/filesystem-watcher';
-import { DefaultWindowService, WindowService } from '@theia/core/lib/browser/window/window-service';
+import { WindowService } from '@theia/core/lib/browser/window/window-service';
+import { DefaultWindowService } from '@theia/core/lib/browser/window/default-window-service';
 import { WorkspaceServer } from '../common';
 import { DefaultWorkspaceServer } from '../node/default-workspace-server';
 import { Emitter, Disposable, DisposableCollection, ILogger, Logger } from '@theia/core';
@@ -242,7 +243,7 @@ describe('WorkspaceService', () => {
             expect((<sinon.SinonStub>mockILogger.error).called).to.be.true;
         });
 
-        it('should use the workspace path in the URL fragment, if available', async function () {
+        it('should use the workspace path in the URL fragment, if available', async function (): Promise<void> {
             const workspacePath = '/home/somewhere';
             window.location.hash = '#' + workspacePath;
             const stat = <FileStat>{
@@ -599,10 +600,10 @@ describe('WorkspaceService', () => {
         });
     });
 
-    describe('isMultiRootWorkspaceOpened status', () => {
+    describe('isMultiRootWorkspaceEnabled status', () => {
         it('should be true if there is an opened workspace and preference["workspace.supportMultiRootWorkspace"] = true, otherwise false', () => {
             mockPreferenceValues['workspace.supportMultiRootWorkspace'] = true;
-            expect(wsService.isMultiRootWorkspaceOpened).to.be.false;
+            expect(wsService.isMultiRootWorkspaceEnabled).to.be.false;
 
             const file = <FileStat>{
                 uri: 'file:///home/file',
@@ -611,9 +612,31 @@ describe('WorkspaceService', () => {
             };
             wsService['_workspace'] = file;
             mockPreferenceValues['workspace.supportMultiRootWorkspace'] = true;
-            expect(wsService.isMultiRootWorkspaceOpened).to.be.true;
+            expect(wsService.isMultiRootWorkspaceEnabled).to.be.true;
 
             mockPreferenceValues['workspace.supportMultiRootWorkspace'] = false;
+            expect(wsService.isMultiRootWorkspaceEnabled).to.be.false;
+        });
+    });
+
+    describe('isMultiRootWorkspaceOpened status', () => {
+        it('should be true if there is an opened workspace and the workspace is not a directory, otherwise false', () => {
+            expect(wsService.isMultiRootWorkspaceOpened).to.be.false;
+
+            const file = <FileStat>{
+                uri: 'file:///home/file',
+                lastModification: 0,
+                isDirectory: false
+            };
+            wsService['_workspace'] = file;
+            expect(wsService.isMultiRootWorkspaceOpened).to.be.true;
+
+            const dir = <FileStat>{
+                uri: 'file:///home/dir',
+                lastModification: 0,
+                isDirectory: true
+            };
+            wsService['_workspace'] = dir;
             expect(wsService.isMultiRootWorkspaceOpened).to.be.false;
         });
     });

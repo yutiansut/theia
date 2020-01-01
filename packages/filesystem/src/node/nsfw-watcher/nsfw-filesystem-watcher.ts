@@ -121,10 +121,16 @@ export class NsfwFileSystemWatcherServer implements FileSystemWatcherServer {
                 }
                 if (event.action === nsfw.actions.RENAMED) {
                     this.pushDeleted(watcherId, this.resolvePath(event.directory, event.oldFile!));
-                    this.pushAdded(watcherId, this.resolvePath(event.directory, event.newFile!));
+                    this.pushAdded(watcherId, this.resolvePath(event.newDirectory || event.directory, event.newFile!));
                 }
             }
-        });
+        }, {
+                errorCallback: error => {
+                    // see https://github.com/atom/github/issues/342
+                    console.warn(`Failed to watch "${basePath}":`, error);
+                    this.unwatchFileChanges(watcherId);
+                }
+            });
         await watcher.start();
         this.options.info('Started watching:', basePath);
         if (toDisposeWatcher.disposed) {
@@ -159,7 +165,7 @@ export class NsfwFileSystemWatcherServer implements FileSystemWatcherServer {
         return Promise.resolve();
     }
 
-    setClient(client: FileSystemWatcherClient | undefined) {
+    setClient(client: FileSystemWatcherClient | undefined): void {
         if (client && this.toDispose.disposed) {
             return;
         }

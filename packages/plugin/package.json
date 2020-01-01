@@ -1,6 +1,6 @@
 {
   "name": "@theia/plugin",
-  "version": "0.5.0",
+  "version": "0.14.0",
   "description": "Theia - Plugin API",
   "types": "./src/theia.d.ts",
   "publishConfig": {
@@ -9,12 +9,12 @@
   "license": "EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/theia-ide/theia.git"
+    "url": "https://github.com/eclipse-theia/theia.git"
   },
   "bugs": {
-    "url": "https://github.com/theia-ide/theia/issues"
+    "url": "https://github.com/eclipse-theia/theia/issues"
   },
-  "homepage": "https://github.com/theia-ide/theia",
+  "homepage": "https://github.com/eclipse-theia/theia",
   "files": [
     "src"
   ],
@@ -23,11 +23,10 @@
     "clean": "theiaext clean",
     "build": "theiaext build",
     "watch": "theiaext watch",
-    "test": "theiaext test",
-    "docs": "rimraf docs && typedoc --module commonjs --target es6 --mode file --hideGenerator --name 'Theia Plug-in API' --excludeExternals --includeDeclarations --out ./docs/api  src/theia.d.ts"
+    "test": "theiaext test"
   },
   "devDependencies": {
-    "@theia/ext-scripts": "^0.5.0"
+    "@theia/ext-scripts": "^0.14.0"
   },
   "nyc": {
     "extends": "../../configs/nyc.json"

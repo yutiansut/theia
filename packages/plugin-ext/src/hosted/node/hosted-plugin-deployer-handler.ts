@@ -16,8 +16,9 @@
 
 import { injectable, inject } from 'inversify';
 import { ILogger } from '@theia/core';
-import { PluginDeployerHandler, PluginDeployerEntry, PluginMetadata } from '../../common/plugin-protocol';
+import { PluginDeployerHandler, PluginDeployerEntry, PluginEntryPoint, DeployedPlugin, PluginDependencies } from '../../common/plugin-protocol';
 import { HostedPluginReader } from './plugin-reader';
+import { Deferred } from '@theia/core/lib/common/promise-util';
 
 @injectable()
 export class HostedPluginDeployerHandler implements PluginDeployerHandler {
@@ -31,46 +32,97 @@ export class HostedPluginDeployerHandler implements PluginDeployerHandler {
     /**
      * Managed plugin metadata backend entries.
      */
-    private readonly currentBackendPluginsMetadata: PluginMetadata[] = [];
+    private readonly deployedBackendPlugins = new Map<string, DeployedPlugin>();
 
     /**
      * Managed plugin metadata frontend entries.
      */
-    private readonly currentFrontendPluginsMetadata: PluginMetadata[] = [];
+    private readonly deployedFrontendPlugins = new Map<string, DeployedPlugin>();
 
-    getDeployedFrontendMetadata(): PluginMetadata[] {
-        return this.currentFrontendPluginsMetadata;
+    private backendPluginsMetadataDeferred = new Deferred<void>();
+
+    private frontendPluginsMetadataDeferred = new Deferred<void>();
+
+    async getDeployedFrontendPluginIds(): Promise<string[]> {
+        // await first deploy
+        await this.frontendPluginsMetadataDeferred.promise;
+        // fetch the last deployed state
+        return [...this.deployedFrontendPlugins.keys()];
     }
 
-    getDeployedBackendMetadata(): PluginMetadata[] {
-        return this.currentBackendPluginsMetadata;
+    async getDeployedBackendPluginIds(): Promise<string[]> {
+        // await first deploy
+        await this.backendPluginsMetadataDeferred.promise;
+        // fetch the last deployed state
+        return [...this.deployedBackendPlugins.keys()];
+    }
+
+    getDeployedPlugin(pluginId: string): DeployedPlugin | undefined {
+        const metadata = this.deployedBackendPlugins.get(pluginId);
+        if (metadata) {
+            return metadata;
+        }
+        return this.deployedFrontendPlugins.get(pluginId);
+    }
+
+    /**
+     * @throws never! in order to isolate plugin deployment
+     */
+    async getPluginDependencies(entry: PluginDeployerEntry): Promise<PluginDependencies | undefined> {
+        const pluginPath = entry.path();
+        try {
+            const manifest = await this.reader.readPackage(pluginPath);
+            if (!manifest) {
+                return undefined;
+            }
+            const metadata = this.reader.readMetadata(manifest);
+            const dependencies: PluginDependencies = { metadata };
+            dependencies.mapping = this.reader.readDependencies(manifest);
+            return dependencies;
+        } catch (e) {
+            console.error(`Failed to load plugin dependencies from '${pluginPath}' path`, e);
+            return undefined;
+        }
     }
 
     async deployFrontendPlugins(frontendPlugins: PluginDeployerEntry[]): Promise<void> {
         for (const plugin of frontendPlugins) {
-            const metadata = await this.reader.getPluginMetadata(plugin.path());
-            if (metadata) {
-                if (this.getDeployedFrontendMetadata().some(value => value.model.id === metadata.model.id)) {
-                    continue;
-                }
-
-                this.currentFrontendPluginsMetadata.push(metadata);
-                this.logger.info(`Deploying frontend plugin "${metadata.model.name}@${metadata.model.version}" from "${metadata.model.entryPoint.frontend || plugin.path()}"`);
-            }
+            await this.deployPlugin(plugin, 'frontend');
         }
+        // resolve on first deploy
+        this.frontendPluginsMetadataDeferred.resolve(undefined);
     }
 
     async deployBackendPlugins(backendPlugins: PluginDeployerEntry[]): Promise<void> {
         for (const plugin of backendPlugins) {
-            const metadata = await this.reader.getPluginMetadata(plugin.path());
-            if (metadata) {
-                if (this.getDeployedBackendMetadata().some(value => value.model.id === metadata.model.id)) {
-                    continue;
-                }
+            await this.deployPlugin(plugin, 'backend');
+        }
+        // resolve on first deploy
+        this.backendPluginsMetadataDeferred.resolve(undefined);
+    }
 
-                this.currentBackendPluginsMetadata.push(metadata);
-                this.logger.info(`Deploying backend plugin "${metadata.model.name}@${metadata.model.version}" from "${metadata.model.entryPoint.backend || plugin.path()}"`);
+    /**
+     * @throws never! in order to isolate plugin deployment
+     */
+    protected async deployPlugin(entry: PluginDeployerEntry, entryPoint: keyof PluginEntryPoint): Promise<void> {
+        const pluginPath = entry.path();
+        try {
+            const manifest = await this.reader.readPackage(pluginPath);
+            if (!manifest) {
+                return;
             }
+
+            const metadata = this.reader.readMetadata(manifest);
+            if (this.deployedBackendPlugins.has(metadata.model.id)) {
+                return;
+            }
+
+            const deployed: DeployedPlugin = { metadata };
+            deployed.contributes = this.reader.readContribution(manifest);
+            this.deployedBackendPlugins.set(metadata.model.id, deployed);
+            this.logger.info(`Deploying ${entryPoint} plugin "${metadata.model.name}@${metadata.model.version}" from "${metadata.model.entryPoint[entryPoint] || pluginPath}"`);
+        } catch (e) {
+            console.error(`Failed to deploy ${entryPoint} plugin from '${pluginPath}' path`, e);
         }
     }
 

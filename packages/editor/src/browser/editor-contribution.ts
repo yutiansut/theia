@@ -24,9 +24,13 @@ import { Languages } from '@theia/languages/lib/browser';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { DisposableCollection } from '@theia/core';
 import { EditorCommands } from './editor-command';
+import { EditorQuickOpenService } from './editor-quick-open-service';
+import { CommandRegistry, CommandContribution } from '@theia/core/lib/common';
+import { KeybindingRegistry, KeybindingContribution, QuickOpenContribution, QuickOpenHandlerRegistry } from '@theia/core/lib/browser';
+import { SUPPORTED_ENCODINGS } from './supported-encodings';
 
 @injectable()
-export class EditorContribution implements FrontendApplicationContribution {
+export class EditorContribution implements FrontendApplicationContribution, CommandContribution, KeybindingContribution, QuickOpenContribution {
 
     @inject(StatusBar) protected readonly statusBar: StatusBar;
     @inject(EditorManager) protected readonly editorManager: EditorManager;
@@ -34,6 +38,9 @@ export class EditorContribution implements FrontendApplicationContribution {
 
     @inject(ContextKeyService)
     protected readonly contextKeyService: ContextKeyService;
+
+    @inject(EditorQuickOpenService)
+    protected readonly editorQuickOpenService: EditorQuickOpenService;
 
     onStart(): void {
         this.initEditorContextKeys();
@@ -83,10 +90,12 @@ export class EditorContribution implements FrontendApplicationContribution {
         const widget = this.editorManager.currentEditor;
         const editor = widget && widget.editor;
         this.updateLanguageStatus(editor);
+        this.updateEncodingStatus(editor);
         this.setCursorPositionStatus(editor);
         if (editor) {
             this.toDisposeOnCurrentEditorChanged.pushAll([
                 editor.onLanguageChanged(() => this.updateLanguageStatus(editor)),
+                editor.onEncodingChanged(() => this.updateEncodingStatus(editor)),
                 editor.onCursorPositionChanged(() => this.setCursorPositionStatus(editor))
             ]);
         }
@@ -103,7 +112,22 @@ export class EditorContribution implements FrontendApplicationContribution {
             text: languageName,
             alignment: StatusBarAlignment.RIGHT,
             priority: 1,
-            command: EditorCommands.CHANGE_LANGUAGE.id
+            command: EditorCommands.CHANGE_LANGUAGE.id,
+            tooltip: 'Select Language Mode'
+        });
+    }
+
+    protected updateEncodingStatus(editor: TextEditor | undefined): void {
+        if (!editor) {
+            this.statusBar.removeElement('editor-status-encoding');
+            return;
+        }
+        this.statusBar.setElement('editor-status-encoding', {
+            text: SUPPORTED_ENCODINGS[editor.getEncoding()].labelShort,
+            alignment: StatusBarAlignment.RIGHT,
+            priority: 10,
+            command: EditorCommands.CHANGE_ENCODING.id,
+            tooltip: 'Select Encoding'
         });
     }
 
@@ -116,7 +140,26 @@ export class EditorContribution implements FrontendApplicationContribution {
         this.statusBar.setElement('editor-status-cursor-position', {
             text: `Ln ${cursor.line + 1}, Col ${editor.getVisibleColumn(cursor)}`,
             alignment: StatusBarAlignment.RIGHT,
-            priority: 100
+            priority: 100,
+            tooltip: 'Go To Line',
+            command: 'editor.action.gotoLine'
         });
+    }
+
+    registerCommands(commands: CommandRegistry): void {
+        commands.registerCommand(EditorCommands.SHOW_ALL_OPENED_EDITORS, {
+            execute: () => this.editorQuickOpenService.open()
+        });
+    }
+
+    registerKeybindings(keybindings: KeybindingRegistry): void {
+        keybindings.registerKeybinding({
+            command: EditorCommands.SHOW_ALL_OPENED_EDITORS.id,
+            keybinding: 'ctrlcmd+k ctrlcmd+p'
+        });
+    }
+
+    registerQuickOpenHandlers(handlers: QuickOpenHandlerRegistry): void {
+        handlers.registerHandler(this.editorQuickOpenService);
     }
 }

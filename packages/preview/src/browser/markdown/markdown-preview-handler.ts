@@ -18,6 +18,7 @@ import { injectable, inject } from 'inversify';
 import URI from '@theia/core/lib/common/uri';
 import { OpenerService } from '@theia/core/lib/browser';
 import { isOSX } from '@theia/core/lib/common';
+import { Path } from '@theia/core/lib/common/path';
 
 import * as hljs from 'highlight.js';
 import * as markdownit from 'markdown-it';
@@ -91,22 +92,23 @@ export class MarkdownPreviewHandler implements PreviewHandler {
 
     protected resolveUri(link: string, uri: URI, preview: boolean): URI {
         const linkURI = new URI(link);
-        if (!linkURI.path.isAbsolute && (
-            !(linkURI.scheme || linkURI.authority) ||
-            (linkURI.scheme === uri.scheme && linkURI.authority === uri.authority)
-        )) {
-            const resolvedUri = uri.parent.resolve(linkURI.path).withFragment(linkURI.fragment).withQuery(linkURI.query);
+        // URIs are always absolute, check link as a path whether it is relative
+        if (!new Path(link).isAbsolute && linkURI.scheme === uri.scheme &&
+            (!linkURI.authority || linkURI.authority === uri.authority)) {
+            // get a relative path from URI by trimming leading `/`
+            const relativePath = linkURI.path.toString().substring(1);
+            const resolvedUri = uri.parent.resolve(relativePath).withFragment(linkURI.fragment).withQuery(linkURI.query);
             return preview ? PreviewUri.encode(resolvedUri) : resolvedUri;
         }
         return linkURI;
     }
 
-    protected revealFragment(contentElement: HTMLElement, fragment: string) {
+    protected revealFragment(contentElement: HTMLElement, fragment: string): void {
         const elementToReveal = this.findElementForFragment(contentElement, fragment);
         if (!elementToReveal) {
             return;
         }
-        elementToReveal.scrollIntoView({ behavior: 'instant' });
+        elementToReveal.scrollIntoView();
     }
 
     findElementForFragment(content: HTMLElement, link: string): HTMLElement | undefined {
@@ -204,10 +206,10 @@ export class MarkdownPreviewHandler implements PreviewHandler {
         return attribute ? Number.parseInt(attribute) : undefined;
     }
 
-    protected engine: markdownit.MarkdownIt | undefined;
-    protected getEngine(): markdownit.MarkdownIt {
+    protected engine: markdownit | undefined;
+    protected getEngine(): markdownit {
         if (!this.engine) {
-            const engine: markdownit.MarkdownIt = this.engine = markdownit({
+            const engine: markdownit = this.engine = markdownit({
                 html: true,
                 linkify: true,
                 highlight: (str, lang) => {
@@ -230,6 +232,7 @@ export class MarkdownPreviewHandler implements PreviewHandler {
                         token.attrSet('data-line', line.toString());
                     }
                     return (originalRenderer)
+                        // tslint:disable-next-line:no-void-expression
                         ? originalRenderer(tokens, index, options, env, self)
                         : self.renderToken(tokens, index, options);
                 };
@@ -247,6 +250,7 @@ export class MarkdownPreviewHandler implements PreviewHandler {
                         }
                     }
                 }
+                // tslint:disable-next-line:no-void-expression
                 return originalImageRenderer(tokens, index, options, env, self);
             };
 
@@ -285,6 +289,7 @@ export class MarkdownPreviewHandler implements PreviewHandler {
                         const documentUri = env.originUri;
                         currentToken.content = normalizeAllImgSrcInHTML(content, link => this.linkNormalizer.normalizeLink(documentUri, link));
                     }
+                    // tslint:disable-next-line:no-void-expression
                     return originalRenderer(tokens, index, options, env, self);
                 };
             }

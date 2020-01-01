@@ -14,9 +14,12 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+.theia-Files {
+    height: 100%;
+}
+
 .theia-navigator-container {
     font-size: var(--theia-ui-font-size1);
-    color: var(--theia-ui-font-color1);
     padding: 5px;
     position: relative;
 }
@@ -34,28 +37,12 @@
 }
 
 .p-Widget .open-workspace-button {
-    border: 1px solid var(--theia-border-color1);
-    color: var(--theia-ui-font-color1);
-    font-size: var(--theia-ui-font-size1);
-    border-radius: 0;
-    background-color: var(--theia-accent-color3);
-    outline: none;
-    cursor: pointer;
-    padding-left: 12px;
-    padding-right: 12px;
-    padding-top: 4px;
-    padding-bottom: 4px;
+    padding: 4px 12px;
     width: calc(100% - var(--theia-ui-padding)*4);
+    margin-left: 0;
 }
 
 .navigator-tab-icon {
     -webkit-mask: url('files.svg');
     mask: url('files.svg');
-}
-
-#files > div > div > div > div:first-child {
-    background-color: var(--theia-layout-color4);
-    text-transform: uppercase;
-    font-size: 80%;
-    font-weight: 500;
 }

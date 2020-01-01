@@ -108,6 +108,9 @@ export class Path {
         return new Path(this.raw.substr(0, index)).root;
     }
 
+    /**
+     * Returns the parent directory if it exists (`hasDir === true`) or `this` otherwise.
+     */
     get dir(): Path {
         if (this._dir === undefined) {
             this._dir = this.computeDir();
@@ -115,14 +118,21 @@ export class Path {
         return this._dir;
     }
 
+    /**
+     * Returns `true` if this has a parent directory, `false` otherwise.
+     *
+     * _This implementation returns `true` if and only if this is not the root dir and
+     * there is a path separator in the raw path._
+     */
+    get hasDir(): boolean {
+        return !this.isRoot && this.raw.lastIndexOf(Path.separator) !== -1;
+    }
+
     protected computeDir(): Path {
-        if (this.isRoot) {
+        if (!this.hasDir) {
             return this;
         }
         const lastIndex = this.raw.lastIndexOf(Path.separator);
-        if (lastIndex === -1) {
-            return this;
-        }
         if (this.isAbsolute) {
             const firstIndex = this.raw.indexOf(Path.separator);
             if (firstIndex === lastIndex) {
@@ -176,5 +186,36 @@ export class Path {
             return relativeStr.split(Path.separator).length;
         }
         return -1;
+    }
+
+    /*
+     * return a normalized Path, resolving '..' and '.' segments
+     */
+    normalize(): Path {
+        const trailingSlash = this.raw.endsWith('/');
+        const pathArray = this.toString().split('/');
+        const resultArray: string[] = [];
+        pathArray.forEach((value, index) => {
+            if (!value || value === '.') {
+                return;
+            }
+            if (value === '..') {
+                if (resultArray.length && resultArray[resultArray.length - 1] !== '..') {
+                    resultArray.pop();
+                } else if (!this.isAbsolute) {
+                    resultArray.push('..');
+                }
+            } else {
+                resultArray.push(value);
+            }
+        });
+        if (resultArray.length === 0) {
+            if (this.isRoot) {
+                return new Path('/');
+            } else {
+                return new Path('.');
+            }
+        }
+        return new Path((this.isAbsolute ? '/' : '') + resultArray.join('/') + (trailingSlash ? '/' : ''));
     }
 }

@@ -13,6 +13,11 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
+// copied from https://github.com/microsoft/vscode/blob/1.37.0/src/vs/workbench/api/common/extHostTypes.ts
+/*---------------------------------------------------------------------------------------------
+*  Copyright (c) Microsoft Corporation. All rights reserved.
+*  Licensed under the MIT License. See License.txt in the project root for license information.
+*--------------------------------------------------------------------------------------------*/
 
 import { UUID } from '@phosphor/coreutils/lib/uuid';
 import { illegalArgument } from '../common/errors';
@@ -22,7 +27,7 @@ import URI from 'vscode-uri';
 import { relative } from '../common/paths-util';
 import { startsWithIgnoreCase } from '../common/strings';
 import { MarkdownString, isMarkdownString } from './markdown-string';
-import { SymbolKind } from '../api/model';
+import { SymbolKind } from '../common/plugin-api-rpc-model';
 
 export class Disposable {
     private disposable: undefined | (() => void);
@@ -99,7 +104,7 @@ export enum TextEditorSelectionChangeKind {
 }
 
 export namespace TextEditorSelectionChangeKind {
-    export function fromValue(s: string | undefined) {
+    export function fromValue(s: string | undefined): TextEditorSelectionChangeKind | undefined {
         switch (s) {
             case 'keyboard': return TextEditorSelectionChangeKind.Keyboard;
             case 'mouse': return TextEditorSelectionChangeKind.Mouse;
@@ -529,9 +534,9 @@ export class ThemeColor {
 
 export class ThemeIcon {
 
-    static readonly File: ThemeIcon;
+    static readonly File: ThemeIcon = new ThemeIcon('file');
 
-    static readonly Folder: ThemeIcon;
+    static readonly Folder: ThemeIcon = new ThemeIcon('folder');
 
     private constructor(public id: string) {
     }
@@ -785,6 +790,17 @@ export class Location {
             this.range = new Range(rangeOrPosition, rangeOrPosition);
         }
     }
+
+    static isLocation(thing: {}): thing is theia.Location {
+        if (thing instanceof Location) {
+            return true;
+        }
+        if (!thing) {
+            return false;
+        }
+        return Range.isRange((<Location>thing).range)
+            && URI.isUri((<Location>thing).uri);
+    }
 }
 
 export enum DiagnosticTag {
@@ -819,10 +835,10 @@ export enum MarkerTag {
 }
 
 export class ParameterInformation {
-    label: string;
+    label: string | [number, number];
     documentation?: string | MarkdownString;
 
-    constructor(label: string, documentation?: string | MarkdownString) {
+    constructor(label: string | [number, number], documentation?: string | MarkdownString) {
         this.label = label;
         this.documentation = documentation;
     }
@@ -836,13 +852,24 @@ export class SignatureInformation {
     constructor(label: string, documentation?: string | MarkdownString) {
         this.label = label;
         this.documentation = documentation;
+        this.parameters = [];
     }
+}
+
+export enum SignatureHelpTriggerKind {
+    Invoke = 1,
+    TriggerCharacter = 2,
+    ContentChange = 3,
 }
 
 export class SignatureHelp {
     signatures: SignatureInformation[];
     activeSignature: number;
     activeParameter: number;
+
+    constructor() {
+        this.signatures = [];
+    }
 }
 
 export class Hover {
@@ -938,6 +965,7 @@ export class CodeActionKind {
     public static readonly RefactorRewrite = CodeActionKind.Refactor.append('rewrite');
     public static readonly Source = CodeActionKind.Empty.append('source');
     public static readonly SourceOrganizeImports = CodeActionKind.Source.append('organizeImports');
+    public static readonly SourceFixAll = CodeActionKind.Source.append('fixAll');
 
     constructor(
         public readonly value: string
@@ -949,6 +977,10 @@ export class CodeActionKind {
 
     public contains(other: CodeActionKind): boolean {
         return this.value === other.value || startsWithIgnoreCase(other.value, this.value + CodeActionKind.sep);
+    }
+
+    public intersects(other: CodeActionKind): boolean {
+        return this.contains(other) || other.contains(this);
     }
 }
 
@@ -1108,7 +1140,7 @@ export class WorkspaceEdit implements theia.WorkspaceEdit {
 
 export class TreeItem {
 
-    label?: string;
+    label?: string | theia.TreeItemLabel;
 
     id?: string;
 
@@ -1122,9 +1154,9 @@ export class TreeItem {
 
     contextValue?: string;
 
-    constructor(label: string, collapsibleState?: theia.TreeItemCollapsibleState)
+    constructor(label: string | theia.TreeItemLabel, collapsibleState?: theia.TreeItemCollapsibleState)
     constructor(resourceUri: URI, collapsibleState?: theia.TreeItemCollapsibleState)
-    constructor(arg1: string | URI, public collapsibleState: theia.TreeItemCollapsibleState = TreeItemCollapsibleState.None) {
+    constructor(arg1: string | theia.TreeItemLabel | URI, public collapsibleState: theia.TreeItemCollapsibleState = TreeItemCollapsibleState.None) {
         if (arg1 instanceof URI) {
             this.resourceUri = arg1;
         } else {
@@ -1219,6 +1251,30 @@ export enum FileChangeType {
     Changed = 1,
     Created = 2,
     Deleted = 3,
+}
+
+export enum CommentThreadCollapsibleState {
+    Collapsed = 0,
+    Expanded = 1
+}
+
+export interface QuickInputButton {
+    readonly iconPath: URI | { light: string | URI; dark: string | URI } | ThemeIcon;
+    readonly tooltip?: string | undefined;
+}
+
+export class QuickInputButtons {
+    static readonly Back: QuickInputButton = {
+        iconPath: {
+            id: 'Back'
+        },
+        tooltip: 'Back'
+    };
+}
+
+export enum CommentMode {
+    Editing = 0,
+    Preview = 1
 }
 
 export class FileSystemError extends Error {
@@ -1500,7 +1556,7 @@ export class TaskGroup {
     public static Rebuild: TaskGroup = new TaskGroup('rebuild', 'Rebuild');
     public static Test: TaskGroup = new TaskGroup('test', 'Test');
 
-    public static from(value: string) {
+    public static from(value: string): TaskGroup | undefined {
         switch (value) {
             case 'clean':
                 return TaskGroup.Clean;
@@ -1536,7 +1592,7 @@ export enum TaskScope {
 }
 
 export class Task {
-    private taskDefinition: theia.TaskDefinition | undefined;
+    private taskDefinition: theia.TaskDefinition;
     private taskScope: theia.TaskScope.Global | theia.TaskScope.Workspace | theia.WorkspaceFolder | undefined;
     private taskName: string;
     private taskExecution: ProcessExecution | ShellExecution | undefined;
@@ -1546,13 +1602,51 @@ export class Task {
     private taskSource: string;
     private taskGroup: TaskGroup | undefined;
     private taskPresentationOptions: theia.TaskPresentationOptions | undefined;
-
-    constructor(taskDefinition: theia.TaskDefinition,
+    constructor(
+        taskDefinition: theia.TaskDefinition,
         scope: theia.WorkspaceFolder | theia.TaskScope.Global | theia.TaskScope.Workspace,
         name: string,
         source: string,
         execution?: ProcessExecution | ShellExecution,
-        problemMatchers?: string | string[]) {
+        problemMatchers?: string | string[]
+    );
+
+    // Deprecated constructor used by Jake vscode built-in
+    constructor(
+        taskDefinition: theia.TaskDefinition,
+        name: string,
+        source: string,
+        execution?: ProcessExecution | ShellExecution,
+        problemMatchers?: string | string[],
+    );
+
+    // tslint:disable-next-line:no-any
+    constructor(...args: any[]) {
+        let taskDefinition: theia.TaskDefinition;
+        let scope: theia.WorkspaceFolder | theia.TaskScope.Global | theia.TaskScope.Workspace | undefined;
+        let name: string;
+        let source: string;
+        let execution: ProcessExecution | ShellExecution | undefined;
+        let problemMatchers: string | string[] | undefined;
+
+        if (typeof args[1] === 'string') {
+            [
+                taskDefinition,
+                name,
+                source,
+                execution,
+                problemMatchers,
+            ] = args;
+        } else {
+            [
+                taskDefinition,
+                scope,
+                name,
+                source,
+                execution,
+                problemMatchers,
+            ] = args;
+        }
 
         this.definition = taskDefinition;
         this.scope = scope;
@@ -1573,11 +1667,11 @@ export class Task {
         this.isTaskBackground = false;
     }
 
-    get definition(): theia.TaskDefinition | undefined {
+    get definition(): theia.TaskDefinition {
         return this.taskDefinition;
     }
 
-    set definition(value: theia.TaskDefinition | undefined) {
+    set definition(value: theia.TaskDefinition) {
         if (value === undefined || value === null) {
             throw illegalArgument('Kind can\'t be undefined or null');
         }
@@ -1589,6 +1683,9 @@ export class Task {
     }
 
     set scope(value: theia.TaskScope.Global | theia.TaskScope.Workspace | theia.WorkspaceFolder | undefined) {
+        if (value === null) {
+            value = undefined;
+        }
         this.taskScope = value;
     }
 
@@ -1682,14 +1779,73 @@ export class Task {
         if (this.taskExecution instanceof ProcessExecution) {
             Object.assign(this.taskDefinition, {
                 type: 'process',
-                id: this.taskExecution.computeId()
+                id: this.taskExecution.computeId(),
+                taskType: this.taskDefinition!.type
             });
         } else if (this.taskExecution instanceof ShellExecution) {
             Object.assign(this.taskDefinition, {
                 type: 'shell',
-                id: this.taskExecution.computeId()
+                id: this.taskExecution.computeId(),
+                taskType: this.taskDefinition!.type
             });
         }
+    }
+}
+
+export class DebugAdapterExecutable {
+    /**
+     * The command or path of the debug adapter executable.
+     * A command must be either an absolute path of an executable or the name of an command to be looked up via the PATH environment variable.
+     * The special value 'node' will be mapped to VS Code's built-in Node.js runtime.
+     */
+    readonly command: string;
+
+    /**
+     * The arguments passed to the debug adapter executable. Defaults to an empty array.
+     */
+    readonly args?: string[];
+
+    /**
+     * Optional options to be used when the debug adapter is started.
+     * Defaults to undefined.
+     */
+    readonly options?: theia.DebugAdapterExecutableOptions;
+
+    /**
+     * Creates a description for a debug adapter based on an executable program.
+     *
+     * @param command The command or executable path that implements the debug adapter.
+     * @param args Optional arguments to be passed to the command or executable.
+     * @param options Optional options to be used when starting the command or executable.
+     */
+    constructor(command: string, args?: string[], options?: theia.DebugAdapterExecutableOptions) {
+        this.command = command;
+        this.args = args;
+        this.options = options;
+    }
+}
+
+/**
+ * Represents a debug adapter running as a socket based server.
+ */
+export class DebugAdapterServer {
+
+    /**
+     * The port.
+     */
+    readonly port: number;
+
+    /**
+     * The host.
+     */
+    readonly host?: string;
+
+    /**
+     * Create a description for a debug adapter running as a socket based server.
+     */
+    constructor(port: number, host?: string) {
+        this.port = port;
+        this.host = host;
     }
 }
 

@@ -24,7 +24,7 @@ import { GitHistoryWidget } from './git-history-widget';
 import { Git } from '../../common';
 import { GitRepositoryTracker } from '../git-repository-tracker';
 import { GitRepositoryProvider } from '../git-repository-provider';
-import { EDITOR_CONTEXT_MENU_GIT } from '../git-view-contribution';
+import { EDITOR_CONTEXT_MENU_GIT } from '../git-contribution';
 
 export const GIT_HISTORY_ID = 'git-history';
 export const GIT_HISTORY_LABEL = 'Git History';
@@ -69,21 +69,21 @@ export class GitHistoryContribution extends AbstractViewContribution<GitHistoryW
     }
 
     @postConstruct()
-    protected init() {
+    protected init(): void {
         this.repositoryTracker.onDidChangeRepository(async repository => {
             this.refreshWidget(repository ? repository.localUri : undefined);
         }
         );
         this.repositoryTracker.onGitEvent(event => {
-            const { source, status, oldStatus } = event;
+            const { source, status, oldStatus } = event || { source: undefined, status: undefined, oldStatus: undefined };
             let isBranchChanged = false;
             let isHeaderChanged = false;
             if (oldStatus) {
-                isBranchChanged = status.branch !== oldStatus.branch;
-                isHeaderChanged = status.currentHead !== oldStatus.currentHead;
+                isBranchChanged = !!status && status.branch !== oldStatus.branch;
+                isHeaderChanged = !!status && status.currentHead !== oldStatus.currentHead;
             }
             if (isBranchChanged || isHeaderChanged || oldStatus === undefined) {
-                this.refreshWidget(source.localUri);
+                this.refreshWidget(source && source.localUri);
             }
         });
     }
@@ -112,12 +112,10 @@ export class GitHistoryContribution extends AbstractViewContribution<GitHistoryW
             isVisible: (uri: URI) => !!this.repositoryProvider.findRepository(uri),
             execute: async uri => this.openView({ activate: true, uri: uri.toString() }),
         }));
-        commands.registerCommand(GitHistoryCommands.OPEN_BRANCH_HISTORY, {
-            execute: () => this.openView({ activate: true, uri: undefined })
-        });
+        super.registerCommands(commands);
     }
 
-    protected async refreshWidget(uri: string | undefined) {
+    protected async refreshWidget(uri: string | undefined): Promise<void> {
         const widget = this.tryGetWidget();
         if (!widget) {
             // the widget doesn't exist, so don't wake it up

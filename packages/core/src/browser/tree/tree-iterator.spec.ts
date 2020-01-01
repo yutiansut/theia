@@ -15,20 +15,12 @@
  ********************************************************************************/
 
 import { expect } from 'chai';
-import { Container } from 'inversify';
 import { notEmpty } from '../../common/objects';
-import { ILogger } from '../../common/logger';
-import { MockLogger } from '../../common/test/mock-logger';
-import { TreeSearch } from './tree-search';
-import { FuzzySearch } from './fuzzy-search';
-import { Tree, TreeImpl } from './tree';
 import { MockTreeModel } from './test/mock-tree-model';
-import { TreeNavigationService } from './tree-navigation';
-import { TreeModel, TreeModelImpl } from './tree-model';
-import { TreeSelectionService } from './tree-selection';
-import { TreeSelectionServiceImpl } from './tree-selection-impl';
-import { TreeExpansionService, TreeExpansionServiceImpl, ExpandableTreeNode } from './tree-expansion';
+import { TreeModel } from './tree-model';
 import { DepthFirstTreeIterator, BreadthFirstTreeIterator, BottomUpTreeIterator, TopDownTreeIterator, Iterators } from './tree-iterator';
+import { createTreeTestContainer } from './test/tree-test-container';
+import { ExpandableTreeNode } from './tree-expansion';
 
 // tslint:disable:no-unused-expression
 // tslint:disable:max-line-length
@@ -119,21 +111,7 @@ describe('tree-iterator', () => {
     }
 
     function createTreeModel(): TreeModel {
-        const container = new Container({ defaultScope: 'Singleton' });
-        container.bind(TreeImpl).toSelf();
-        container.bind(Tree).toService(TreeImpl);
-        container.bind(TreeSelectionServiceImpl).toSelf();
-        container.bind(TreeSelectionService).toService(TreeSelectionServiceImpl);
-        container.bind(TreeExpansionServiceImpl).toSelf();
-        container.bind(TreeExpansionService).toService(TreeExpansionServiceImpl);
-        container.bind(TreeNavigationService).toSelf();
-        container.bind(TreeModelImpl).toSelf();
-        container.bind(TreeModel).toService(TreeModelImpl);
-        container.bind(TreeSearch).toSelf();
-        container.bind(FuzzySearch).toSelf();
-        container.bind(MockLogger).toSelf();
-        container.bind(ILogger).to(MockLogger).inSingletonScope();
-        return container.get(TreeModel);
+        return createTreeTestContainer().get(TreeModel);
     }
 
 });
@@ -155,7 +133,7 @@ describe('iterators', () => {
         expect(array).to.be.empty;
     });
 
-    it('cycle - without start', function () {
+    it('cycle - without start', function (): void {
         this.timeout(1000);
         const array = [1, 2, 3, 4];
         const itr = Iterators.cycle(array);
@@ -173,7 +151,7 @@ describe('iterators', () => {
         }
     });
 
-    it('cycle - with start', function () {
+    it('cycle - with start', function (): void {
         this.timeout(1000);
         const array = [1, 2, 3, 4];
         const itr = Iterators.cycle(array, 2);

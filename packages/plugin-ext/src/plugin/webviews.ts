@@ -14,23 +14,36 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { WebviewsExt, WebviewPanelViewState, WebviewsMain, PLUGIN_RPC_CONTEXT, /* WebviewsMain, PLUGIN_RPC_CONTEXT  */ } from '../api/plugin-api';
+import { v4 } from 'uuid';
+import { WebviewsExt, WebviewPanelViewState, WebviewsMain, PLUGIN_RPC_CONTEXT, WebviewInitData, /* WebviewsMain, PLUGIN_RPC_CONTEXT  */ } from '../common/plugin-api-rpc';
 import * as theia from '@theia/plugin';
-import { RPCProtocol } from '../api/rpc-protocol';
-import URI from 'vscode-uri/lib/umd';
+import { RPCProtocol } from '../common/rpc-protocol';
+import { Plugin } from '../common/plugin-api-rpc';
+import URI from 'vscode-uri';
 import { Emitter, Event } from '@theia/core/lib/common/event';
 import { fromViewColumn, toViewColumn, toWebviewPanelShowOptions } from './type-converters';
-import { IdGenerator } from '../common/id-generator';
 import { Disposable, WebviewPanelTargetArea } from './types-impl';
+import { WorkspaceExtImpl } from './workspace';
+import { PluginIconPath } from './plugin-icon-path';
 
 export class WebviewsExtImpl implements WebviewsExt {
     private readonly proxy: WebviewsMain;
-    private readonly idGenerator = new IdGenerator('v');
     private readonly webviewPanels = new Map<string, WebviewPanelImpl>();
-    private readonly serializers = new Map<string, theia.WebviewPanelSerializer>();
+    private readonly serializers = new Map<string, {
+        serializer: theia.WebviewPanelSerializer,
+        plugin: Plugin
+    }>();
+    private initData: WebviewInitData | undefined;
 
-    constructor(rpc: RPCProtocol) {
+    constructor(
+        rpc: RPCProtocol,
+        private readonly workspace: WorkspaceExtImpl,
+    ) {
         this.proxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.WEBVIEWS_MAIN);
+    }
+
+    init(initData: WebviewInitData): void {
+        this.initData = initData;
     }
 
     // tslint:disable-next-line:no-any
@@ -65,45 +78,55 @@ export class WebviewsExtImpl implements WebviewsExt {
         title: string,
         // tslint:disable-next-line:no-any
         state: any,
-        position: number,
+        viewState: WebviewPanelViewState,
         options: theia.WebviewOptions & theia.WebviewPanelOptions): PromiseLike<void> {
-        const serializer = this.serializers.get(viewType);
-        if (!serializer) {
+        if (!this.initData) {
+            return Promise.reject(new Error('Webviews are not initialized'));
+        }
+        const entry = this.serializers.get(viewType);
+        if (!entry) {
             return Promise.reject(new Error(`No serializer found for '${viewType}'`));
         }
+        const { serializer, plugin } = entry;
 
-        const webview = new WebviewImpl(viewId, this.proxy, options);
-        const revivedPanel = new WebviewPanelImpl(viewId, this.proxy, viewType, title, toViewColumn(position)!, options, webview);
+        const webview = new WebviewImpl(viewId, this.proxy, options, this.initData, this.workspace, plugin);
+        const revivedPanel = new WebviewPanelImpl(viewId, this.proxy, viewType, title, toViewColumn(viewState.position)!, options, webview);
+        revivedPanel.setActive(viewState.active);
+        revivedPanel.setVisible(viewState.visible);
         this.webviewPanels.set(viewId, revivedPanel);
         return serializer.deserializeWebviewPanel(revivedPanel, state);
     }
 
-    createWebview(viewType: string,
+    createWebview(
+        viewType: string,
         title: string,
         showOptions: theia.ViewColumn | theia.WebviewPanelShowOptions,
-        options: (theia.WebviewPanelOptions & theia.WebviewOptions) | undefined,
-        extensionLocation: URI): theia.WebviewPanel {
-
+        options: theia.WebviewPanelOptions & theia.WebviewOptions,
+        plugin: Plugin
+    ): theia.WebviewPanel {
+        if (!this.initData) {
+            throw new Error('Webviews are not initialized');
+        }
         const webviewShowOptions = toWebviewPanelShowOptions(showOptions);
-        const viewId = this.idGenerator.nextId();
-        this.proxy.$createWebviewPanel(viewId, viewType, title, webviewShowOptions, options, extensionLocation);
+        const viewId = v4();
+        this.proxy.$createWebviewPanel(viewId, viewType, title, webviewShowOptions, WebviewImpl.toWebviewOptions(options, this.workspace, plugin));
 
-        const webview = new WebviewImpl(viewId, this.proxy, options);
+        const webview = new WebviewImpl(viewId, this.proxy, options, this.initData, this.workspace, plugin);
         const panel = new WebviewPanelImpl(viewId, this.proxy, viewType, title, webviewShowOptions, options, webview);
         this.webviewPanels.set(viewId, panel);
         return panel;
-
     }
 
     registerWebviewPanelSerializer(
         viewType: string,
-        serializer: theia.WebviewPanelSerializer
+        serializer: theia.WebviewPanelSerializer,
+        plugin: Plugin
     ): theia.Disposable {
         if (this.serializers.has(viewType)) {
             throw new Error(`Serializer for '${viewType}' already registered`);
         }
 
-        this.serializers.set(viewType, serializer);
+        this.serializers.set(viewType, { serializer, plugin });
         this.proxy.$registerSerializer(viewType);
 
         return new Disposable(() => {
@@ -113,7 +136,10 @@ export class WebviewsExtImpl implements WebviewsExt {
     }
 
     private getWebviewPanel(viewId: string): WebviewPanelImpl | undefined {
-        return this.webviewPanels.get(viewId);
+        if (this.webviewPanels.has(viewId)) {
+            return this.webviewPanels.get(viewId);
+        }
+        return undefined;
     }
 }
 
@@ -128,13 +154,18 @@ export class WebviewImpl implements theia.Webview {
     // tslint:disable-next-line:no-any
     public readonly onDidReceiveMessage: Event<any> = this.onMessageEmitter.event;
 
-    constructor(private readonly viewId: string,
+    constructor(
+        private readonly viewId: string,
         private readonly proxy: WebviewsMain,
-        options: theia.WebviewOptions | undefined) {
-        this._options = options!;
+        options: theia.WebviewOptions,
+        private readonly initData: WebviewInitData,
+        private readonly workspace: WorkspaceExtImpl,
+        readonly plugin: Plugin
+    ) {
+        this._options = options;
     }
 
-    dispose() {
+    dispose(): void {
         if (this.isDisposed) {
             return;
         }
@@ -142,10 +173,30 @@ export class WebviewImpl implements theia.Webview {
         this.onMessageEmitter.dispose();
     }
 
-    // tslint:disable-next-line:no-any
-    postMessage(message: any): PromiseLike<boolean> {
+    asWebviewUri(resource: theia.Uri): theia.Uri {
+        const uri = this.initData.webviewResourceRoot
+            // Make sure we preserve the scheme of the resource but convert it into a normal path segment
+            // The scheme is important as we need to know if we are requesting a local or a remote resource.
+            .replace('{{resource}}', resource.scheme + resource.toString().replace(/^\S+?:/, ''))
+            .replace('{{uuid}}', this.viewId);
+        return URI.parse(uri);
+    }
+
+    get cspSource(): string {
+        return this.initData.webviewCspSource.replace('{{uuid}}', this.viewId);
+    }
+
+    get html(): string {
         this.checkIsDisposed();
-        return this.proxy.$postMessage(this.viewId, message);
+        return this._html;
+    }
+
+    set html(value: string) {
+        this.checkIsDisposed();
+        if (this._html !== value) {
+            this._html = value;
+            this.proxy.$setHtml(this.viewId, value);
+        }
     }
 
     get options(): theia.WebviewOptions {
@@ -155,27 +206,30 @@ export class WebviewImpl implements theia.Webview {
 
     set options(newOptions: theia.WebviewOptions) {
         this.checkIsDisposed();
-        this.proxy.$setOptions(this.viewId, newOptions);
+        this.proxy.$setOptions(this.viewId, WebviewImpl.toWebviewOptions(newOptions, this.workspace, this.plugin));
         this._options = newOptions;
     }
 
-    get html(): string {
+    // tslint:disable-next-line:no-any
+    postMessage(message: any): PromiseLike<boolean> {
         this.checkIsDisposed();
-        return this._html;
+        return this.proxy.$postMessage(this.viewId, message);
     }
 
-    set html(newHtml: string) {
-        this.checkIsDisposed();
-        if (this._html !== newHtml) {
-            this._html = newHtml;
-            this.proxy.$setHtml(this.viewId, newHtml);
-        }
-    }
-
-    private checkIsDisposed() {
+    private checkIsDisposed(): void {
         if (this.isDisposed) {
             throw new Error('This Webview is disposed!');
         }
+    }
+
+    static toWebviewOptions(options: theia.WebviewOptions, workspace: WorkspaceExtImpl, plugin: Plugin): theia.WebviewOptions {
+        return {
+            ...options,
+            localResourceRoots: options.localResourceRoots || [
+                ...(workspace.workspaceFolders || []).map(x => x.uri),
+                URI.file(plugin.pluginFolder)
+            ]
+        };
     }
 }
 
@@ -185,6 +239,7 @@ export class WebviewPanelImpl implements theia.WebviewPanel {
     private _active = true;
     private _visible = true;
     private _showOptions: theia.WebviewPanelShowOptions;
+    private _iconPath: theia.Uri | { light: theia.Uri; dark: theia.Uri } | undefined;
 
     readonly onDisposeEmitter = new Emitter<void>();
     public readonly onDidDispose: Event<void> = this.onDisposeEmitter.event;
@@ -197,13 +252,13 @@ export class WebviewPanelImpl implements theia.WebviewPanel {
         private readonly _viewType: string,
         private _title: string,
         showOptions: theia.ViewColumn | theia.WebviewPanelShowOptions,
-        private readonly _options: theia.WebviewPanelOptions | undefined,
+        private readonly _options: theia.WebviewPanelOptions,
         private readonly _webview: WebviewImpl
     ) {
         this._showOptions = typeof showOptions === 'object' ? showOptions : { viewColumn: showOptions as theia.ViewColumn };
     }
 
-    dispose() {
+    dispose(): void {
         if (this.isDisposed) {
             return;
         }
@@ -236,26 +291,26 @@ export class WebviewPanelImpl implements theia.WebviewPanel {
         }
     }
 
-    set iconPath(iconPath: theia.Uri | { light: theia.Uri; dark: theia.Uri }) {
+    get iconPath(): theia.Uri | { light: theia.Uri; dark: theia.Uri } | undefined {
+        return this._iconPath;
+    }
+
+    set iconPath(iconPath: theia.Uri | { light: theia.Uri; dark: theia.Uri } | undefined) {
         this.checkIsDisposed();
-        if (URI.isUri(iconPath)) {
-            this.proxy.$setIconPath(this.viewId, (<theia.Uri>iconPath).path);
-        } else {
-            this.proxy.$setIconPath(this.viewId, {
-                light: (<{ light: theia.Uri; dark: theia.Uri }>iconPath).light.path,
-                dark: (<{ light: theia.Uri; dark: theia.Uri }>iconPath).dark.path
-            });
+        if (this._iconPath !== iconPath) {
+            this._iconPath = iconPath;
+            this.proxy.$setIconPath(this.viewId, PluginIconPath.toUrl(iconPath, this._webview.plugin));
         }
     }
 
-    get webview() {
+    get webview(): WebviewImpl {
         this.checkIsDisposed();
         return this._webview;
     }
 
     get options(): theia.WebviewPanelOptions {
         this.checkIsDisposed();
-        return this._options!;
+        return this._options;
     }
 
     get viewColumn(): theia.ViewColumn | undefined {
@@ -263,7 +318,7 @@ export class WebviewPanelImpl implements theia.WebviewPanel {
         return this._showOptions.viewColumn;
     }
 
-    setViewColumn(value: theia.ViewColumn) {
+    setViewColumn(value: theia.ViewColumn | undefined): void {
         this.checkIsDisposed();
         this._showOptions.viewColumn = value;
     }
@@ -273,7 +328,7 @@ export class WebviewPanelImpl implements theia.WebviewPanel {
         return this._showOptions;
     }
 
-    setShowOptions(value: theia.WebviewPanelShowOptions) {
+    setShowOptions(value: theia.WebviewPanelShowOptions): void {
         this.checkIsDisposed();
         this._showOptions = value;
     }
@@ -283,7 +338,7 @@ export class WebviewPanelImpl implements theia.WebviewPanel {
         return this._active;
     }
 
-    setActive(value: boolean) {
+    setActive(value: boolean): void {
         this.checkIsDisposed();
         this._active = value;
     }
@@ -293,17 +348,33 @@ export class WebviewPanelImpl implements theia.WebviewPanel {
         return this._visible;
     }
 
-    setVisible(value: boolean) {
+    setVisible(value: boolean): void {
         this.checkIsDisposed();
         this._visible = value;
     }
 
-    reveal(area?: WebviewPanelTargetArea, viewColumn?: theia.ViewColumn, preserveFocus?: boolean): void {
+    reveal(arg0?: theia.ViewColumn | WebviewPanelTargetArea, arg1?: theia.ViewColumn | boolean, arg2?: boolean): void {
+        let area: WebviewPanelTargetArea | undefined = undefined;
+        let viewColumn: theia.ViewColumn | undefined = undefined;
+        let preserveFocus: boolean | undefined = undefined;
+        if (typeof arg0 === 'number') {
+            viewColumn = arg0;
+        } else {
+            area = arg0;
+        }
+        if (typeof arg1 === 'number') {
+            viewColumn = arg1;
+        } else {
+            preserveFocus = arg1;
+        }
+        if (typeof arg2 === 'boolean') {
+            preserveFocus = arg2;
+        }
         this.checkIsDisposed();
         this.proxy.$reveal(this.viewId, {
-            area: area,
+            area,
             viewColumn: viewColumn ? fromViewColumn(viewColumn) : undefined,
-            preserveFocus: !!preserveFocus
+            preserveFocus
         });
     }
 
@@ -313,7 +384,7 @@ export class WebviewPanelImpl implements theia.WebviewPanel {
         return this.proxy.$postMessage(this.viewId, message);
     }
 
-    private checkIsDisposed() {
+    private checkIsDisposed(): void {
         if (this.isDisposed) {
             throw new Error('This WebviewPanel is disposed!');
         }

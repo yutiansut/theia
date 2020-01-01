@@ -16,17 +16,24 @@
 
 import { injectable, inject } from 'inversify';
 import { ITokenTypeMap, IEmbeddedLanguagesMap, StandardTokenType } from 'vscode-textmate';
-import { TextmateRegistry, getEncodedLanguageId, MonacoTextmateService } from '@theia/monaco/lib/browser/textmate';
+import { TextmateRegistry, getEncodedLanguageId, MonacoTextmateService, GrammarDefinition } from '@theia/monaco/lib/browser/textmate';
 import { MenusContributionPointHandler } from './menus/menus-contribution-handler';
-import { ViewRegistry } from './view/view-registry';
-import { PluginContribution, IndentationRules, FoldingRules, ScopeMap } from '../../common';
+import { PluginViewRegistry } from './view/plugin-view-registry';
+import { PluginContribution, IndentationRules, FoldingRules, ScopeMap, DeployedPlugin } from '../../common';
 import { PreferenceSchemaProvider } from '@theia/core/lib/browser';
 import { PreferenceSchema, PreferenceSchemaProperties } from '@theia/core/lib/browser/preferences';
 import { KeybindingsContributionPointHandler } from './keybindings/keybindings-contribution-handler';
 import { MonacoSnippetSuggestProvider } from '@theia/monaco/lib/browser/monaco-snippet-suggest-provider';
 import { PluginSharedStyle } from './plugin-shared-style';
-import { CommandRegistry } from '@theia/core';
-import { BuiltinThemeProvider } from '@theia/core/lib/browser/theming';
+import { CommandRegistry, Command, CommandHandler } from '@theia/core/lib/common/command';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
+import { Emitter } from '@theia/core/lib/common/event';
+import { TaskDefinitionRegistry, ProblemMatcherRegistry, ProblemPatternRegistry } from '@theia/task/lib/browser';
+import { PluginDebugService } from './debug/plugin-debug-service';
+import { DebugSchemaUpdater } from '@theia/debug/lib/browser/debug-schema-updater';
+import { MonacoThemingService } from '@theia/monaco/lib/browser/monaco-theming-service';
+import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
+import { PluginIconThemeService } from './plugin-icon-theme-service';
 
 @injectable()
 export class PluginContributionHandler {
@@ -36,8 +43,8 @@ export class PluginContributionHandler {
     @inject(TextmateRegistry)
     private readonly grammarsRegistry: TextmateRegistry;
 
-    @inject(ViewRegistry)
-    private readonly viewRegistry: ViewRegistry;
+    @inject(PluginViewRegistry)
+    private readonly viewRegistry: PluginViewRegistry;
 
     @inject(MenusContributionPointHandler)
     private readonly menusContributionHandler: MenusContributionPointHandler;
@@ -60,16 +67,78 @@ export class PluginContributionHandler {
     @inject(PluginSharedStyle)
     protected readonly style: PluginSharedStyle;
 
-    handleContributions(contributions: PluginContribution): void {
-        if (contributions.configuration) {
-            this.updateConfigurationSchema(contributions.configuration);
+    @inject(TaskDefinitionRegistry)
+    protected readonly taskDefinitionRegistry: TaskDefinitionRegistry;
+
+    @inject(ProblemMatcherRegistry)
+    protected readonly problemMatcherRegistry: ProblemMatcherRegistry;
+
+    @inject(ProblemPatternRegistry)
+    protected readonly problemPatternRegistry: ProblemPatternRegistry;
+
+    @inject(PluginDebugService)
+    protected readonly debugService: PluginDebugService;
+
+    @inject(DebugSchemaUpdater)
+    protected readonly debugSchema: DebugSchemaUpdater;
+
+    @inject(MonacoThemingService)
+    protected readonly monacoThemingService: MonacoThemingService;
+
+    @inject(ColorRegistry)
+    protected readonly colors: ColorRegistry;
+
+    @inject(PluginIconThemeService)
+    protected readonly iconThemeService: PluginIconThemeService;
+
+    protected readonly commandHandlers = new Map<string, CommandHandler['execute'] | undefined>();
+
+    protected readonly onDidRegisterCommandHandlerEmitter = new Emitter<string>();
+    readonly onDidRegisterCommandHandler = this.onDidRegisterCommandHandlerEmitter.event;
+
+    protected readonly activatedLanguages = new Set<string>();
+
+    /**
+     * Always synchronous in order to simplify handling disconnections.
+     * @throws never, loading of each contribution should handle errors
+     * in order to avoid preventing loading of other contibutions or extensions
+     */
+    handleContributions(clientId: string, plugin: DeployedPlugin): Disposable {
+        const contributions = plugin.contributes;
+        if (!contributions) {
+            return Disposable.NULL;
         }
-        if (contributions.configurationDefaults) {
-            this.updateDefaultOverridesSchema(contributions.configurationDefaults);
+        const toDispose = new DisposableCollection();
+        const pushContribution = (id: string, contribute: () => Disposable) => {
+            try {
+                toDispose.push(contribute());
+            } catch (e) {
+                console.error(`[${clientId}][${plugin.metadata.model.id}]: Failed to load '${id}' contribution.`, e);
+            }
+        };
+
+        const configuration = contributions.configuration;
+        if (configuration) {
+            for (const config of configuration) {
+                pushContribution('configuration', () => this.preferenceSchemaProvider.setSchema(config));
+            }
         }
 
-        if (contributions.languages) {
-            for (const lang of contributions.languages) {
+        const configurationDefaults = contributions.configurationDefaults;
+        if (configurationDefaults) {
+            pushContribution('configurationDefaults', () => this.updateDefaultOverridesSchema(configurationDefaults));
+        }
+
+        const languages = contributions.languages;
+        if (languages && languages.length) {
+            for (const lang of languages) {
+                /*
+                 * Monaco guesses a language for opened plain text models on `monaco.languages.register`.
+                 * It can trigger language activation before grammars are registered.
+                 * Install onLanguage listener earlier in order to catch such activations and activate grammars as well.
+                 */
+                monaco.languages.onLanguage(lang.id, () => this.activatedLanguages.add(lang.id));
+                // it is not possible to unregister a language
                 monaco.languages.register({
                     id: lang.id,
                     aliases: lang.aliases,
@@ -79,111 +148,214 @@ export class PluginContributionHandler {
                     firstLine: lang.firstLine,
                     mimetypes: lang.mimetypes
                 });
-                if (lang.configuration) {
-                    monaco.languages.setLanguageConfiguration(lang.id, {
-                        wordPattern: this.createRegex(lang.configuration.wordPattern),
-                        autoClosingPairs: lang.configuration.autoClosingPairs,
-                        brackets: lang.configuration.brackets,
-                        comments: lang.configuration.comments,
-                        folding: this.convertFolding(lang.configuration.folding),
-                        surroundingPairs: lang.configuration.surroundingPairs,
-                        indentationRules: this.convertIndentationRules(lang.configuration.indentationRules)
-                    });
+                const langConfiguration = lang.configuration;
+                if (langConfiguration) {
+                    pushContribution(`language.${lang.id}.configuration`, () => monaco.languages.setLanguageConfiguration(lang.id, {
+                        wordPattern: this.createRegex(langConfiguration.wordPattern),
+                        autoClosingPairs: langConfiguration.autoClosingPairs,
+                        brackets: langConfiguration.brackets,
+                        comments: langConfiguration.comments,
+                        folding: this.convertFolding(langConfiguration.folding),
+                        surroundingPairs: langConfiguration.surroundingPairs,
+                        indentationRules: this.convertIndentationRules(langConfiguration.indentationRules)
+                    }));
                 }
             }
         }
 
-        if (contributions.grammars) {
-            for (const grammar of contributions.grammars) {
+        const grammars = contributions.grammars;
+        if (grammars && grammars.length) {
+            for (const grammar of grammars) {
                 if (grammar.injectTo) {
                     for (const injectScope of grammar.injectTo) {
-                        let injections = this.injections.get(injectScope);
-                        if (!injections) {
-                            injections = [];
+                        pushContribution(`grammar.injectTo.${injectScope}`, () => {
+                            const injections = this.injections.get(injectScope) || [];
+                            injections.push(grammar.scope);
                             this.injections.set(injectScope, injections);
-                        }
-                        injections.push(grammar.scope);
+                            return Disposable.create(() => {
+                                const index = injections.indexOf(grammar.scope);
+                                if (index !== -1) {
+                                    injections.splice(index, 1);
+                                }
+                            });
+                        });
                     }
                 }
 
-                this.grammarsRegistry.registerTextmateGrammarScope(grammar.scope, {
-                    async getGrammarDefinition() {
+                pushContribution(`grammar.textmate.scope.${grammar.scope}`, () => this.grammarsRegistry.registerTextmateGrammarScope(grammar.scope, {
+                    async getGrammarDefinition(): Promise<GrammarDefinition> {
                         return {
                             format: grammar.format,
                             content: grammar.grammar || '',
+                            location: grammar.grammarLocation
                         };
                     },
                     getInjections: (scopeName: string) =>
                         this.injections.get(scopeName)!
-                });
-                if (grammar.language) {
-                    this.grammarsRegistry.mapLanguageIdToTextmateGrammar(grammar.language, grammar.scope);
-                    this.grammarsRegistry.registerGrammarConfiguration(grammar.language, {
+                }));
+                const language = grammar.language;
+                if (language) {
+                    pushContribution(`grammar.language.${language}.scope`, () => this.grammarsRegistry.mapLanguageIdToTextmateGrammar(language, grammar.scope));
+                    pushContribution(`grammar.language.${language}.configuration`, () => this.grammarsRegistry.registerGrammarConfiguration(language, {
                         embeddedLanguages: this.convertEmbeddedLanguages(grammar.embeddedLanguages),
                         tokenTypes: this.convertTokenTypes(grammar.tokenTypes)
-                    });
-                    monaco.languages.onLanguage(grammar.language, () => this.monacoTextmateService.activateLanguage(grammar.language!));
+                    }));
+                    pushContribution(`grammar.language.${language}.activation`,
+                        () => this.onDidActivateLanguage(language, () => this.monacoTextmateService.activateLanguage(language))
+                    );
                 }
             }
         }
+
+        pushContribution('commands', () => this.registerCommands(contributions));
+        pushContribution('menus', () => this.menusContributionHandler.handle(contributions));
+        pushContribution('keybindings', () => this.keybindingsContributionHandler.handle(contributions));
 
         if (contributions.viewsContainers) {
             for (const location in contributions.viewsContainers) {
                 if (contributions.viewsContainers!.hasOwnProperty(location)) {
-                    const viewContainers = contributions.viewsContainers[location];
-                    viewContainers.forEach(container => {
-                        const views = contributions.views && contributions.views[container.id] ? contributions.views[container.id] : [];
-                        this.viewRegistry.registerViewContainer(location, container, views);
-                    });
+                    for (const viewContainer of contributions.viewsContainers[location]) {
+                        pushContribution(`viewContainers.${viewContainer.id}`,
+                            () => this.viewRegistry.registerViewContainer(location, viewContainer)
+                        );
+                    }
+                }
+            }
+        }
+        if (contributions.views) {
+            // tslint:disable-next-line:forin
+            for (const location in contributions.views) {
+                for (const view of contributions.views[location]) {
+                    pushContribution(`views.${view.id}`,
+                        () => this.viewRegistry.registerView(location, view)
+                    );
                 }
             }
         }
 
-        this.registerCommands(contributions);
-        this.menusContributionHandler.handle(contributions);
-        this.keybindingsContributionHandler.handle(contributions);
         if (contributions.snippets) {
             for (const snippet of contributions.snippets) {
-                this.snippetSuggestProvider.fromURI(snippet.uri, {
+                pushContribution(`snippets.${snippet.uri}`, () => this.snippetSuggestProvider.fromURI(snippet.uri, {
                     language: snippet.language,
                     source: snippet.source
-                });
+                }));
             }
         }
+
+        if (contributions.themes && contributions.themes.length) {
+            const pending = {};
+            for (const theme of contributions.themes) {
+                pushContribution(`themes.${theme.uri}`, () => this.monacoThemingService.register(theme, pending));
+            }
+        }
+
+        if (contributions.iconThemes && contributions.iconThemes.length) {
+            for (const iconTheme of contributions.iconThemes) {
+                pushContribution(`iconThemes.${iconTheme.uri}`, () => this.iconThemeService.register(iconTheme, plugin));
+            }
+        }
+
+        if (contributions.colors) {
+            pushContribution('colors', () => this.colors.register(...contributions.colors));
+        }
+
+        if (contributions.taskDefinitions) {
+            for (const taskDefinition of contributions.taskDefinitions) {
+                pushContribution(`taskDefinitions.${taskDefinition.taskType}`,
+                    () => this.taskDefinitionRegistry.register(taskDefinition)
+                );
+            }
+        }
+
+        if (contributions.problemPatterns) {
+            for (const problemPattern of contributions.problemPatterns) {
+                pushContribution(`problemPatterns.${problemPattern.name || problemPattern.regexp}`,
+                    () => this.problemPatternRegistry.register(problemPattern)
+                );
+            }
+        }
+
+        if (contributions.problemMatchers) {
+            for (const problemMatcher of contributions.problemMatchers) {
+                pushContribution(`problemMatchers.${problemMatcher.label}`,
+                    () => this.problemMatcherRegistry.register(problemMatcher)
+                );
+            }
+        }
+
+        if (contributions.debuggers && contributions.debuggers.length) {
+            toDispose.push(Disposable.create(() => this.debugSchema.update()));
+            for (const contribution of contributions.debuggers) {
+                pushContribution(`debuggers.${contribution.type}`,
+                    () => this.debugService.registerDebugger(contribution)
+                );
+            }
+            this.debugSchema.update();
+        }
+
+        return toDispose;
     }
 
-    protected pluginCommandIconId = 0;
-    protected registerCommands(contribution: PluginContribution): void {
+    protected registerCommands(contribution: PluginContribution): Disposable {
         if (!contribution.commands) {
-            return;
+            return Disposable.NULL;
         }
+        const toDispose = new DisposableCollection();
         for (const { iconUrl, command, category, title } of contribution.commands) {
-            let iconClass: string | undefined;
-            if (iconUrl) {
-                iconClass = 'plugin-command-icon-' + this.pluginCommandIconId++;
-                const darkIconUrl = typeof iconUrl === 'object' ? iconUrl.dark : iconUrl;
-                const lightIconUrl = typeof iconUrl === 'object' ? iconUrl.light : iconUrl;
-                this.style.insertRule('.' + iconClass, theme => `
-                    width: 16px;
-                    height: 16px;
-                    background: no-repeat url("${theme.id === BuiltinThemeProvider.lightTheme.id ? lightIconUrl : darkIconUrl}");
-                `);
+            const reference = iconUrl && this.style.toIconClass(iconUrl);
+            let iconClass;
+            if (reference) {
+                toDispose.push(reference);
+                iconClass = reference.object.iconClass;
             }
-            this.commands.registerCommand({
-                id: command,
-                category,
-                label: title,
-                iconClass
-            });
+            toDispose.push(this.registerCommand({ id: command, category, label: title, iconClass }));
         }
+        return toDispose;
     }
 
-    private updateConfigurationSchema(schema: PreferenceSchema): void {
-        this.validateConfigurationSchema(schema);
-        this.preferenceSchemaProvider.setSchema(schema);
+    registerCommand(command: Command): Disposable {
+        const toDispose = new DisposableCollection();
+        toDispose.push(this.commands.registerCommand(command, {
+            execute: async (...args) => {
+                const handler = this.commandHandlers.get(command.id);
+                if (!handler) {
+                    throw new Error(`command '${command.id}' not found`);
+                }
+                return handler(...args);
+            },
+            // Always enabled - a command can be executed programmatically or via the commands palette.
+            isEnabled(): boolean { return true; },
+            // Visibility rules are defined via the `menus` contribution point.
+            isVisible(): boolean { return true; }
+        }));
+        this.commandHandlers.set(command.id, undefined);
+        toDispose.push(Disposable.create(() => this.commandHandlers.delete(command.id)));
+        return toDispose;
     }
 
-    protected updateDefaultOverridesSchema(configurationDefaults: PreferenceSchemaProperties): void {
+    registerCommandHandler(id: string, execute: CommandHandler['execute']): Disposable {
+        this.commandHandlers.set(id, execute);
+        this.onDidRegisterCommandHandlerEmitter.fire(id);
+        return Disposable.create(() => this.commandHandlers.set(id, undefined));
+    }
+
+    hasCommand(id: string): boolean {
+        return this.commandHandlers.has(id);
+    }
+
+    hasCommandHandler(id: string): boolean {
+        return !!this.commandHandlers.get(id);
+    }
+
+    protected onDidActivateLanguage(language: string, cb: () => {}): Disposable {
+        if (this.activatedLanguages.has(language)) {
+            cb();
+            return Disposable.NULL;
+        }
+        return monaco.languages.onLanguage(language, cb);
+    }
+
+    protected updateDefaultOverridesSchema(configurationDefaults: PreferenceSchemaProperties): Disposable {
         const defaultOverrides: PreferenceSchema = {
             id: 'defaultOverrides',
             title: 'Default Configuration Overrides',
@@ -201,8 +373,9 @@ export class PluginContributionHandler {
             }
         }
         if (Object.keys(defaultOverrides.properties).length) {
-            this.preferenceSchemaProvider.setSchema(defaultOverrides);
+            return this.preferenceSchemaProvider.setSchema(defaultOverrides);
         }
+        return Disposable.NULL;
     }
 
     private createRegex(value: string | undefined): RegExp | undefined {
@@ -286,42 +459,4 @@ export class PluginContributionHandler {
         return result;
     }
 
-    protected validateConfigurationSchema(schema: PreferenceSchema): void {
-        // tslint:disable-next-line:forin
-        for (const p in schema.properties) {
-            const property = schema.properties[p];
-            if (property.type !== 'object') {
-                continue;
-            }
-
-            if (!property.default) {
-                this.validateDefaultValue(property);
-            }
-
-            const properties = property['properties'];
-            if (properties) {
-                // tslint:disable-next-line:forin
-                for (const key in properties) {
-                    if (typeof properties[key] !== 'object') {
-                        delete properties[key];
-                    }
-                }
-            }
-        }
-    }
-
-    private validateDefaultValue(property: PreferenceSchemaProperties): void {
-        property.default = {};
-
-        const properties = property['properties'];
-        if (properties) {
-            // tslint:disable-next-line:forin
-            for (const key in properties) {
-                if (properties[key].default) {
-                    property.default[key] = properties[key].default;
-                    delete properties[key].default;
-                }
-            }
-        }
-    }
 }

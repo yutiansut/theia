@@ -19,9 +19,8 @@ import * as theia from '@theia/plugin';
 import { DocumentsExtImpl } from '../documents';
 import * as types from '../types-impl';
 import * as Converter from '../type-converters';
-import { Position } from '../../api/plugin-api';
-import { DocumentHighlight } from '../../api/model';
-import { createToken } from '../token-provider';
+import { Position } from '../../common/plugin-api-rpc';
+import { DocumentHighlight } from '../../common/plugin-api-rpc-model';
 
 export class DocumentHighlightAdapter {
 
@@ -30,7 +29,7 @@ export class DocumentHighlightAdapter {
         private readonly documents: DocumentsExtImpl) {
     }
 
-    provideDocumentHighlights(resource: URI, position: Position): Promise<DocumentHighlight[] | undefined> {
+    provideDocumentHighlights(resource: URI, position: Position, token: theia.CancellationToken): Promise<DocumentHighlight[] | undefined> {
         const documentData = this.documents.getDocumentData(resource);
         if (!documentData) {
             return Promise.reject(new Error(`There is no document for ${resource}`));
@@ -39,7 +38,7 @@ export class DocumentHighlightAdapter {
         const document = documentData.document;
         const zeroBasedPosition = Converter.toPosition(position);
 
-        return Promise.resolve(this.provider.provideDocumentHighlights(document, zeroBasedPosition, createToken())).then(documentHighlights => {
+        return Promise.resolve(this.provider.provideDocumentHighlights(document, zeroBasedPosition, token)).then(documentHighlights => {
             if (!documentHighlights) {
                 return undefined;
             }

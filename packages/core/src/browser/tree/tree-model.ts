@@ -15,7 +15,7 @@
  ********************************************************************************/
 
 import { inject, injectable, postConstruct } from 'inversify';
-import { DisposableCollection, Event, Emitter, SelectionProvider, ILogger } from '../../common';
+import { DisposableCollection, Event, Emitter, SelectionProvider, ILogger, WaitUntilEvent } from '../../common';
 import { Tree, TreeNode, CompositeTreeNode } from './tree';
 import { TreeSelectionService, SelectableTreeNode, TreeSelection } from './tree-selection';
 import { TreeExpansionService, ExpandableTreeNode } from './tree-expansion';
@@ -33,7 +33,7 @@ export interface TreeModel extends Tree, TreeSelectionService, TreeExpansionServ
      * Expands the given node. If the `node` argument is `undefined`, then expands the currently selected tree node.
      * If multiple tree nodes are selected, expands the most recently selected tree node.
      */
-    expandNode(node?: Readonly<ExpandableTreeNode>): Promise<boolean>;
+    expandNode(node?: Readonly<ExpandableTreeNode>): Promise<Readonly<ExpandableTreeNode> | undefined>;
 
     /**
      * Collapses the given node. If the `node` argument is `undefined`, then collapses the currently selected tree node.
@@ -157,11 +157,7 @@ export class TreeModelImpl implements TreeModel, SelectionProvider<ReadonlyArray
         this.toDispose.push(this.expansionService);
         this.toDispose.push(this.expansionService.onExpansionChanged(node => {
             this.fireChanged();
-            if (!node.expanded && [...this.selectedNodes].some(selectedNode => CompositeTreeNode.isAncestor(node, selectedNode))) {
-                if (SelectableTreeNode.isVisible(node)) {
-                    this.selectNode(node);
-                }
-            }
+            this.handleExpansion(node);
         }));
 
         this.toDispose.push(this.onOpenNodeEmitter);
@@ -169,11 +165,26 @@ export class TreeModelImpl implements TreeModel, SelectionProvider<ReadonlyArray
         this.toDispose.push(this.treeSearch);
     }
 
-    dispose() {
+    dispose(): void {
         this.toDispose.dispose();
     }
 
-    get root() {
+    protected handleExpansion(node: Readonly<ExpandableTreeNode>): void {
+        this.selectIfAncestorOfSelected(node);
+    }
+
+    /**
+     * Select the given node if it is the ancestor of a selected node.
+     */
+    protected selectIfAncestorOfSelected(node: Readonly<ExpandableTreeNode>): void {
+        if (!node.expanded && [...this.selectedNodes].some(selectedNode => CompositeTreeNode.isAncestor(node, selectedNode))) {
+            if (SelectableTreeNode.isVisible(node)) {
+                this.selectNode(node);
+            }
+        }
+    }
+
+    get root(): TreeNode | undefined {
         return this.tree.root;
     }
 
@@ -193,51 +204,52 @@ export class TreeModelImpl implements TreeModel, SelectionProvider<ReadonlyArray
         this.onChangedEmitter.fire(undefined);
     }
 
-    get onNodeRefreshed() {
+    get onNodeRefreshed(): Event<Readonly<CompositeTreeNode> & WaitUntilEvent> {
         return this.tree.onNodeRefreshed;
     }
 
-    getNode(id: string | undefined) {
+    getNode(id: string | undefined): TreeNode | undefined {
         return this.tree.getNode(id);
     }
 
-    validateNode(node: TreeNode | undefined) {
+    validateNode(node: TreeNode | undefined): TreeNode | undefined {
         return this.tree.validateNode(node);
     }
 
-    async refresh(parent?: Readonly<CompositeTreeNode>): Promise<void> {
+    async refresh(parent?: Readonly<CompositeTreeNode>): Promise<CompositeTreeNode | undefined> {
         if (parent) {
-            await this.tree.refresh(parent);
-        } else {
-            await this.tree.refresh();
+            return this.tree.refresh(parent);
         }
+        return this.tree.refresh();
     }
 
+    // tslint:disable-next-line:typedef
     get selectedNodes() {
         return this.selectionService.selectedNodes;
     }
 
+    // tslint:disable-next-line:typedef
     get onSelectionChanged() {
         return this.selectionService.onSelectionChanged;
     }
 
-    get onExpansionChanged() {
+    get onExpansionChanged(): Event<Readonly<ExpandableTreeNode>> {
         return this.expansionService.onExpansionChanged;
     }
 
-    async expandNode(raw?: Readonly<ExpandableTreeNode>): Promise<boolean> {
+    async expandNode(raw?: Readonly<ExpandableTreeNode>): Promise<ExpandableTreeNode | undefined> {
         for (const node of raw ? [raw] : this.selectedNodes) {
             if (ExpandableTreeNode.is(node)) {
-                return await this.expansionService.expandNode(node);
+                return this.expansionService.expandNode(node);
             }
         }
-        return false;
+        return undefined;
     }
 
     async collapseNode(raw?: Readonly<ExpandableTreeNode>): Promise<boolean> {
         for (const node of raw ? [raw] : this.selectedNodes) {
             if (ExpandableTreeNode.is(node)) {
-                return await this.expansionService.collapseNode(node);
+                return this.expansionService.collapseNode(node);
             }
         }
         return false;
@@ -249,7 +261,7 @@ export class TreeModelImpl implements TreeModel, SelectionProvider<ReadonlyArray
             this.selectNode(node);
         }
         if (CompositeTreeNode.is(node)) {
-            return await this.expansionService.collapseAll(node);
+            return this.expansionService.collapseAll(node);
         }
         return false;
     }
@@ -257,7 +269,8 @@ export class TreeModelImpl implements TreeModel, SelectionProvider<ReadonlyArray
     async toggleNodeExpansion(raw?: Readonly<ExpandableTreeNode>): Promise<void> {
         for (const node of raw ? [raw] : this.selectedNodes) {
             if (ExpandableTreeNode.is(node)) {
-                return await this.expansionService.toggleNodeExpansion(node);
+                await this.expansionService.toggleNodeExpansion(node);
+                return;
             }
         }
     }
@@ -406,4 +419,21 @@ export class TreeModelImpl implements TreeModel, SelectionProvider<ReadonlyArray
         this.addSelection({ node, type: TreeSelection.SelectionType.RANGE });
     }
 
+    storeState(): TreeModelImpl.State {
+        return {
+            selection: this.selectionService.storeState()
+        };
+    }
+
+    restoreState(state: TreeModelImpl.State): void {
+        if (state.selection) {
+            this.selectionService.restoreState(state.selection);
+        }
+    }
+
+}
+export namespace TreeModelImpl {
+    export interface State {
+        selection: object
+    }
 }

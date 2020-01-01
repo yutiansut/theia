@@ -15,13 +15,12 @@
  ********************************************************************************/
 
 import { injectable, inject } from 'inversify';
-import { KeybindingContribution, KeybindingRegistry, Key, KeyCode, Keystroke, KeyModifier } from '@theia/core/lib/browser';
+import { KeybindingContribution, KeybindingRegistry, Key, KeyCode, Keystroke, KeyModifier, KeySequence } from '@theia/core/lib/browser';
 import { EditorKeybindingContexts } from '@theia/editor/lib/browser';
 import { MonacoCommands } from './monaco-command';
 import { MonacoCommandRegistry } from './monaco-command-registry';
 import { KEY_CODE_MAP } from './monaco-keycode-map';
-import KeybindingsRegistry = monaco.keybindings.KeybindingsRegistry;
-import { isOSX } from '@theia/core';
+import { isOSX, environment } from '@theia/core';
 
 function monaco2BrowserKeyCode(keyCode: monaco.KeyCode): number {
     for (let i = 0; i < KEY_CODE_MAP.length; i++) {
@@ -39,30 +38,24 @@ export class MonacoKeybindingContribution implements KeybindingContribution {
     protected readonly commands: MonacoCommandRegistry;
 
     registerKeybindings(registry: KeybindingRegistry): void {
-        for (const item of KeybindingsRegistry.getDefaultKeybindings()) {
+        const defaultKeybindings = monaco.keybindings.KeybindingsRegistry.getDefaultKeybindings();
+        // register in reverse order to align with Monaco dispatch logic:
+        // https://github.com/TypeFox/vscode/blob/70b8db24a37fafc77247de7f7cb5bb0195120ed0/src/vs/platform/keybinding/common/keybindingResolver.ts#L302
+        for (let i = defaultKeybindings.length - 1; i >= 0; i--) {
+            const item = defaultKeybindings[i];
             const command = this.commands.validate(item.command);
             if (command) {
                 const raw = item.keybinding;
-                if (raw.type === monaco.keybindings.KeybindingType.Simple) {
-                    let keybinding = raw as monaco.keybindings.SimpleKeybinding;
-                    // TODO: remove this temporary workaround after updating to monaco including the fix for https://github.com/Microsoft/vscode/issues/49225
-                    if (command === 'monaco.editor.action.refactor' && !isOSX) {
-                        keybinding = { ...keybinding, ctrlKey: true, metaKey: false };
-                    }
-                    // TODO: remove this temporary workaround with a holistic solution.
-                    if (command === 'monaco.editor.action.commentLine' && isOSX) {
-                        keybinding = { ...keybinding, ctrlKey: true, metaKey: false };
-                    }
-                    const isInDiffEditor = item.when && /(^|[^!])\bisInDiffEditor\b/gm.test(item.when.serialize());
-                    registry.registerKeybinding({
-                        command,
-                        keybinding: this.keyCode(keybinding).toString(),
-                        context: isInDiffEditor ? EditorKeybindingContexts.diffEditorTextFocus : EditorKeybindingContexts.strictEditorTextFocus
-
-                    });
+                const when = item.when && item.when.serialize();
+                let keybinding;
+                if (item.command === MonacoCommands.GO_TO_DEFINITION && !environment.electron.is()) {
+                    keybinding = 'ctrlcmd+f11';
                 } else {
-                    // FIXME support chord keybindings properly, KeyCode does not allow it right now
+                    keybinding = raw instanceof monaco.keybindings.SimpleKeybinding
+                        ? this.keyCode(raw).toString()
+                        : this.keySequence(raw as monaco.keybindings.ChordKeybinding).join(' ');
                 }
+                registry.registerKeybinding({ command, keybinding, when });
             }
         }
 
@@ -80,7 +73,7 @@ export class MonacoKeybindingContribution implements KeybindingContribution {
     protected keyCode(keybinding: monaco.keybindings.SimpleKeybinding): KeyCode {
         const keyCode = keybinding.keyCode;
         const sequence: Keystroke = {
-            first: Key.getKey(monaco2BrowserKeyCode(keyCode & 255)),
+            first: Key.getKey(monaco2BrowserKeyCode(keyCode & 0xff)),
             modifiers: []
         };
         if (keybinding.ctrlKey) {
@@ -100,5 +93,9 @@ export class MonacoKeybindingContribution implements KeybindingContribution {
             sequence.modifiers!.push(KeyModifier.CtrlCmd);
         }
         return KeyCode.createKeyCode(sequence);
+    }
+
+    protected keySequence(keybinding: monaco.keybindings.ChordKeybinding): KeySequence {
+        return keybinding.parts.map(part => this.keyCode(part));
     }
 }

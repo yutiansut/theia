@@ -36,7 +36,7 @@ export class BlameDecorator implements HoverProvider {
 
     protected registerHoverProvider(uri: string): Disposable {
         if (this.languages.registerHoverProvider) {
-            return this.languages.registerHoverProvider([{ pattern: new URI(uri).withoutScheme().toString() }], this);
+            return this.languages.registerHoverProvider([{ pattern: new URI(uri).path.toString() }], this);
         }
         return Disposable.NULL;
     }
@@ -210,8 +210,8 @@ export namespace BlameDecorator {
 
     export const defaultGutterStyles = <CSSStyleDeclaration>{
         width: `${maxWidth}ch`,
-        color: 'var(--theia-ui-font-color0)',
-        backgroundColor: 'var(--theia-layout-color1)',
+        color: 'var(--theia-gitlens-gutterForegroundColor)',
+        backgroundColor: 'var(--theia-gitlens-gutterBackgroundColor)',
         height: '100%',
         margin: '0 26px -1px 0',
         display: 'inline-block',
@@ -223,7 +223,7 @@ export namespace BlameDecorator {
     });
 
     export const highlightStyle = new EditorDecorationStyle('git-blame-highlight::before', style => {
-        style.backgroundColor = 'var(--theia-layout-color2)';
+        style.backgroundColor = 'var(--theia-gitlens-lineHighlightBackgroundColor)';
     });
 
 }

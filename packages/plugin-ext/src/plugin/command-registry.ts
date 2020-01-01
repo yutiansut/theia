@@ -13,24 +13,43 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 
 import * as theia from '@theia/plugin';
-import { CommandRegistryExt, PLUGIN_RPC_CONTEXT as Ext, CommandRegistryMain } from '../api/plugin-api';
-import { RPCProtocol } from '../api/rpc-protocol';
+import * as model from '../common/plugin-api-rpc-model';
+import { CommandRegistryExt, PLUGIN_RPC_CONTEXT as Ext, CommandRegistryMain } from '../common/plugin-api-rpc';
+import { RPCProtocol } from '../common/rpc-protocol';
 import { Disposable } from './types-impl';
-import { KnownCommands } from './type-converters';
+import { DisposableCollection } from '@theia/core';
+import { KnownCommands } from '../common/known-commands';
 
 // tslint:disable-next-line:no-any
-export type Handler = <T>(...args: any[]) => T | PromiseLike<T>;
+export type Handler = <T>(...args: any[]) => T | PromiseLike<T | undefined>;
+
+export interface ArgumentProcessor {
+    // tslint:disable-next-line:no-any
+    processArgument(arg: any): any;
+}
 
 export class CommandRegistryImpl implements CommandRegistryExt {
 
     private proxy: CommandRegistryMain;
     private readonly commands = new Set<string>();
     private readonly handlers = new Map<string, Handler>();
+    private readonly argumentProcessors: ArgumentProcessor[];
+    private readonly commandsConverter: CommandsConverter;
 
     constructor(rpc: RPCProtocol) {
         this.proxy = rpc.getProxy(Ext.COMMAND_REGISTRY_MAIN);
+        this.argumentProcessors = [];
+        this.commandsConverter = new CommandsConverter(this);
+    }
+
+    get converter(): CommandsConverter {
+        return this.commandsConverter;
     }
 
     // tslint:disable-next-line:no-any
@@ -71,7 +90,7 @@ export class CommandRegistryImpl implements CommandRegistryExt {
     }
 
     // tslint:disable-next-line:no-any
-    $executeCommand<T>(id: string, ...args: any[]): PromiseLike<T> {
+    $executeCommand<T>(id: string, ...args: any[]): PromiseLike<T | undefined> {
         if (this.handlers.has(id)) {
             return this.executeLocalCommand(id, ...args);
         } else {
@@ -83,9 +102,12 @@ export class CommandRegistryImpl implements CommandRegistryExt {
     executeCommand<T>(id: string, ...args: any[]): PromiseLike<T | undefined> {
         if (this.handlers.has(id)) {
             return this.executeLocalCommand(id, ...args);
-        } else {
+        } else if (KnownCommands.mapped(id)) {
+            // Using the KnownCommand exclusions, convert the commands manually
             return KnownCommands.map(id, args, (mappedId: string, mappedArgs: any[] | undefined) =>
                 this.proxy.$executeCommand(mappedId, ...mappedArgs));
+        } else {
+            return this.proxy.$executeCommand(id, ...args);
         }
     }
     // tslint:enable:no-any
@@ -95,12 +117,12 @@ export class CommandRegistryImpl implements CommandRegistryExt {
     }
 
     // tslint:disable-next-line:no-any
-    private executeLocalCommand<T>(id: string, ...args: any[]): PromiseLike<T> {
+    private async executeLocalCommand<T>(id: string, ...args: any[]): Promise<T | undefined> {
         const handler = this.handlers.get(id);
         if (handler) {
-            return Promise.resolve(handler(...args));
+            return handler<T>(...args.map(arg => this.argumentProcessors.reduce((r, p) => p.processArgument(r), arg)));
         } else {
-            return Promise.reject(new Error(`Command ${id} doesn't exist`));
+            throw new Error(`Command ${id} doesn't exist`);
         }
     }
 
@@ -111,4 +133,78 @@ export class CommandRegistryImpl implements CommandRegistryExt {
         }
         return result;
     }
+
+    registerArgumentProcessor(processor: ArgumentProcessor): void {
+        this.argumentProcessors.push(processor);
+    }
+}
+
+// copied and modified from https://github.com/microsoft/vscode/blob/1.37.1/src/vs/workbench/api/common/extHostCommands.ts#L217-L259
+export class CommandsConverter {
+
+    private readonly safeCommandId: string;
+    private readonly commands: CommandRegistryImpl;
+    private readonly commandsMap = new Map<number, theia.Command>();
+    private handle = 0;
+    private isSafeCommandRegistered: boolean;
+
+    constructor(commands: CommandRegistryImpl) {
+        this.safeCommandId = `theia_safe_cmd_${Date.now().toString()}`;
+        this.commands = commands;
+        this.isSafeCommandRegistered = false;
+    }
+
+    /**
+     * Convert to a command that can be safely passed over JSON-RPC.
+     */
+    toSafeCommand(command: undefined, disposables: DisposableCollection): undefined;
+    toSafeCommand(command: theia.Command, disposables: DisposableCollection): model.Command;
+    toSafeCommand(command: theia.Command | undefined, disposables: DisposableCollection): model.Command | undefined;
+    toSafeCommand(command: theia.Command | undefined, disposables: DisposableCollection): model.Command | undefined {
+        if (!command) {
+            return undefined;
+        }
+        const result = this.toInternalCommand(command);
+        if (KnownCommands.mapped(result.id)) {
+            return result;
+        }
+
+        if (!this.isSafeCommandRegistered) {
+            this.commands.registerCommand({ id: this.safeCommandId }, this.executeSafeCommand, this);
+            this.isSafeCommandRegistered = true;
+        }
+
+        if (command.command && command.arguments && command.arguments.length > 0) {
+            const id = this.handle++;
+            this.commandsMap.set(id, command);
+            disposables.push(new Disposable(() => this.commandsMap.delete(id)));
+            result.id = this.safeCommandId;
+            result.arguments = [id];
+        }
+
+        return result;
+    }
+
+    protected toInternalCommand(external: theia.Command): model.Command {
+        // we're deprecating Command.id, so it has to be optional.
+        // Existing code will have compiled against a non - optional version of the field, so asserting it to exist is ok
+        // tslint:disable-next-line: no-any
+        return KnownCommands.map((external.command || external.id)!, external.arguments, (mappedId: string, mappedArgs: any[]) =>
+            ({
+                id: mappedId,
+                title: external.title || external.label || ' ',
+                tooltip: external.tooltip,
+                arguments: mappedArgs
+            }));
+    }
+
+    // tslint:disable-next-line:no-any
+    private executeSafeCommand<R>(...args: any[]): PromiseLike<R | undefined> {
+        const command = this.commandsMap.get(args[0]);
+        if (!command || !command.command) {
+            return Promise.reject('command NOT FOUND');
+        }
+        return this.commands.executeCommand(command.command, ...(command.arguments || []));
+    }
+
 }

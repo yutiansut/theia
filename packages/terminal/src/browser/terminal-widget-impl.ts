@@ -17,7 +17,7 @@
 import * as Xterm from 'xterm';
 import { proposeGeometry } from 'xterm/lib/addons/fit/fit';
 import { inject, injectable, named, postConstruct } from 'inversify';
-import { Disposable, Event, Emitter, ILogger, DisposableCollection } from '@theia/core';
+import { ContributionProvider, Disposable, Event, Emitter, ILogger, DisposableCollection } from '@theia/core';
 import { Widget, Message, WebSocketConnectionProvider, StatefulWidget, isFirefox, MessageLoop, KeyCode } from '@theia/core/lib/browser';
 import { isOSX } from '@theia/core/lib/common';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
@@ -25,28 +25,21 @@ import { ShellTerminalServerProxy } from '../common/shell-terminal-protocol';
 import { terminalsPath } from '../common/terminal-protocol';
 import { IBaseTerminalServer } from '../common/base-terminal-protocol';
 import { TerminalWatcher } from '../common/terminal-watcher';
-import { ThemeService } from '@theia/core/lib/browser/theming';
 import { TerminalWidgetOptions, TerminalWidget } from './base/terminal-widget';
 import { MessageConnection } from 'vscode-jsonrpc';
 import { Deferred } from '@theia/core/lib/common/promise-util';
-import { TerminalPreferences } from './terminal-preferences';
+import { TerminalPreferences, TerminalRendererType, isTerminalRendererType, DEFAULT_TERMINAL_RENDERER_TYPE } from './terminal-preferences';
+import { TerminalContribution } from './terminal-contribution';
+import URI from '@theia/core/lib/common/uri';
+import { TerminalService } from './base/terminal-service';
+import { TerminalCopyOnSelectionHandler } from './terminal-copy-on-selection-handler';
+import { TerminalThemeService } from './terminal-theme-service';
 
 export const TERMINAL_WIDGET_FACTORY_ID = 'terminal';
 
 export interface TerminalWidgetFactoryOptions extends Partial<TerminalWidgetOptions> {
     /* a unique string per terminal */
     created: string
-}
-
-interface TerminalCSSProperties {
-    /* The text color, as a CSS color string.  */
-    foreground: string;
-
-    /* The background color, as a CSS color string.  */
-    background: string;
-
-    /* The color of selections. */
-    selection: string;
 }
 
 @injectable()
@@ -59,16 +52,20 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
     protected restored = false;
     protected closeOnDispose = true;
     protected waitForConnection: Deferred<MessageConnection> | undefined;
+    protected hoverMessage: HTMLDivElement;
 
     @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService;
     @inject(WebSocketConnectionProvider) protected readonly webSocketConnectionProvider: WebSocketConnectionProvider;
     @inject(TerminalWidgetOptions) options: TerminalWidgetOptions;
     @inject(ShellTerminalServerProxy) protected readonly shellTerminalServer: ShellTerminalServerProxy;
     @inject(TerminalWatcher) protected readonly terminalWatcher: TerminalWatcher;
-    @inject(ThemeService) protected readonly themeService: ThemeService;
     @inject(ILogger) @named('terminal') protected readonly logger: ILogger;
     @inject('terminal-dom-id') public readonly id: string;
     @inject(TerminalPreferences) protected readonly preferences: TerminalPreferences;
+    @inject(ContributionProvider) @named(TerminalContribution) protected readonly terminalContributionProvider: ContributionProvider<TerminalContribution>;
+    @inject(TerminalService) protected readonly terminalService: TerminalService;
+    @inject(TerminalCopyOnSelectionHandler) protected readonly copyOnSelectionHandler: TerminalCopyOnSelectionHandler;
+    @inject(TerminalThemeService) protected readonly themeService: TerminalThemeService;
 
     protected readonly onDidOpenEmitter = new Emitter<void>();
     readonly onDidOpen: Event<void> = this.onDidOpenEmitter.event;
@@ -83,15 +80,12 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
 
         if (this.options.destroyTermOnClose === true) {
             this.toDispose.push(Disposable.create(() =>
-                this.term.destroy()
+                this.term.dispose()
             ));
         }
 
         this.title.closable = true;
         this.addClass('terminal-container');
-
-        /* Read CSS properties from the page and apply them to the terminal.  */
-        const cssProps = this.getCSSPropertiesFromPage();
 
         this.term = new Xterm.Terminal({
             experimentalCharAtlas: 'dynamic',
@@ -102,38 +96,56 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
             fontWeightBold: this.preferences['terminal.integrated.fontWeightBold'],
             letterSpacing: this.preferences['terminal.integrated.letterSpacing'],
             lineHeight: this.preferences['terminal.integrated.lineHeight'],
-            theme: {
-                foreground: cssProps.foreground,
-                background: cssProps.background,
-                cursor: cssProps.foreground,
-                selection: cssProps.selection
-            },
+            scrollback: this.preferences['terminal.integrated.scrollback'],
+            rendererType: this.getTerminalRendererType(this.preferences['terminal.integrated.rendererType']),
+            theme: this.themeService.theme
         });
+
+        this.hoverMessage = document.createElement('div');
+        this.hoverMessage.textContent = 'Cmd + click to follow link';
+        this.hoverMessage.style.position = 'fixed';
+        // TODO use `var(--theia-editorHoverWidget-foreground) with a newer Monaco version
+        this.hoverMessage.style.color = 'var(--theia-editorWidget-foreground)';
+        this.hoverMessage.style.backgroundColor = 'var(--theia-editorHoverWidget-background)';
+        this.hoverMessage.style.borderColor = 'var(--theia-editorHoverWidget-border)';
+        this.hoverMessage.style.borderWidth = '0.5px';
+        this.hoverMessage.style.borderStyle = 'solid';
+        this.hoverMessage.style.padding = '5px';
+        // Above the xterm.js canvas layers:
+        // https://github.com/xtermjs/xterm.js/blob/ff790236c1b205469f17a21246141f512d844295/src/renderer/Renderer.ts#L41-L46
+        this.hoverMessage.style.zIndex = '10';
+        // Initially invisible:
+        this.hoverMessage.style.display = 'none';
+        this.node.appendChild(this.hoverMessage);
+
         this.toDispose.push(this.preferences.onPreferenceChanged(change => {
             const lastSeparator = change.preferenceName.lastIndexOf('.');
             if (lastSeparator > 0) {
                 const preferenceName = change.preferenceName.substr(lastSeparator + 1);
-                this.term.setOption(preferenceName, this.preferences[change.preferenceName]);
+                let preferenceValue = this.preferences[change.preferenceName];
+
+                if (preferenceName === 'rendererType') {
+                    const newRendererType: string = this.preferences[change.preferenceName] as string;
+                    if (newRendererType !== this.getTerminalRendererType(newRendererType)) {
+                        // given terminal renderer type is not supported or invalid
+                        preferenceValue = DEFAULT_TERMINAL_RENDERER_TYPE;
+                    }
+                }
+
+                this.term.setOption(preferenceName, preferenceValue);
                 this.needsResize = true;
                 this.update();
             }
         }));
 
-        this.toDispose.push(this.themeService.onThemeChange(c => {
-            const changedProps = this.getCSSPropertiesFromPage();
-            this.term.setOption('theme', {
-                foreground: changedProps.foreground,
-                background: changedProps.background,
-                cursor: changedProps.foreground,
-                selection: cssProps.selection
-            });
-        }));
+        this.toDispose.push(this.themeService.onDidChange(() => this.term.setOption('theme', this.themeService.theme)));
         this.attachCustomKeyEventHandler();
-        this.term.on('title', (title: string) => {
+        const titleChangeListenerDispose = this.term.onTitleChange((title: string) => {
             if (this.options.useServerTitle) {
                 this.title.label = title;
             }
         });
+        this.toDispose.push(titleChangeListenerDispose);
 
         this.toDispose.push(this.terminalWatcher.onTerminalError(({ terminalId, error }) => {
             if (terminalId === this.terminalId) {
@@ -160,15 +172,65 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         }));
         this.toDispose.push(this.onTermDidClose);
         this.toDispose.push(this.onDidOpenEmitter);
+
+        this.toDispose.push(this.term.onSelectionChange(() => {
+            if (this.copyOnSelection) {
+                this.copyOnSelectionHandler.copy(this.term.getSelection());
+            }
+        }));
+
+        for (const contribution of this.terminalContributionProvider.getContributions()) {
+            contribution.onCreate(this);
+        }
+    }
+
+    /**
+     * Returns given renderer type if it is valid and supported or default renderer otherwise.
+     *
+     * @param terminalRendererType desired terminal renderer type
+     */
+    private getTerminalRendererType(terminalRendererType?: string | TerminalRendererType): Xterm.RendererType {
+        if (terminalRendererType && isTerminalRendererType(terminalRendererType)) {
+            return terminalRendererType;
+        }
+        return DEFAULT_TERMINAL_RENDERER_TYPE;
+    }
+
+    showHoverMessage(x: number, y: number, message: string): void {
+        this.hoverMessage.innerText = message;
+        this.hoverMessage.style.display = 'inline';
+        this.hoverMessage.style.top = `${y - 30}px`;
+        this.hoverMessage.style.left = `${x - 60}px`;
+    }
+
+    hideHover(): void {
+        this.hoverMessage.style.display = 'none';
+    }
+
+    getTerminal(): Xterm.Terminal {
+        return this.term;
+    }
+
+    get cwd(): Promise<URI> {
+        if (!IBaseTerminalServer.validateId(this.terminalId)) {
+            return Promise.reject(new Error('terminal is not started'));
+        }
+        if (this.terminalService.getById(this.id)) {
+            return this.shellTerminalServer.getCwdURI(this.terminalId)
+                .then(cwdUrl => new URI(cwdUrl));
+        }
+        return Promise.resolve(new URI());
     }
 
     get processId(): Promise<number> {
-        return (async () => {
-            if (!IBaseTerminalServer.validateId(this.terminalId)) {
-                throw new Error('terminal is not started');
-            }
-            return this.shellTerminalServer.getProcessId(this.terminalId);
-        })();
+        if (!IBaseTerminalServer.validateId(this.terminalId)) {
+            return Promise.reject(new Error('terminal is not started'));
+        }
+        return this.shellTerminalServer.getProcessId(this.terminalId);
+    }
+
+    onDispose(onDispose: () => void): void {
+        this.toDispose.push(Disposable.create(onDispose));
     }
 
     clearOutput(): void {
@@ -180,7 +242,7 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         return { terminalId: this.terminalId, titleLabel: this.title.label };
     }
 
-    restoreState(oldState: object) {
+    restoreState(oldState: object): void {
         if (this.restored === false) {
             const state = oldState as { terminalId: number, titleLabel: string };
             /* This is a workaround to issue #879 */
@@ -188,46 +250,6 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
             this.title.label = state.titleLabel;
             this.start(state.terminalId);
         }
-    }
-
-    /* Get the font family and size from the CSS custom properties defined in
-       the root element.  */
-    private getCSSPropertiesFromPage(): TerminalCSSProperties {
-        /* Helper to look up a CSS property value and throw an error if it's
-           not defined.  */
-        function lookup(props: CSSStyleDeclaration, name: string): string {
-            /* There is sometimes an extra space in the front, remove it.  */
-            const value = props.getPropertyValue(name).trim();
-            if (!value) {
-                throw new Error(`Couldn\'t find value of ${name}`);
-            }
-
-            return value;
-        }
-
-        /* Get the CSS properties of <html> (aka :root in css).  */
-        const htmlElementProps = getComputedStyle(document.documentElement!);
-
-        const foreground = lookup(htmlElementProps, '--theia-ui-font-color1');
-        const background = lookup(htmlElementProps, '--theia-layout-color0');
-        const selection = lookup(htmlElementProps, '--theia-transparent-accent-color2');
-
-        /* xterm.js expects #XXX of #XXXXXX for colors.  */
-        const colorRe = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
-
-        if (!foreground.match(colorRe)) {
-            throw new Error(`Unexpected format for --theia-ui-font-color1 (${foreground})`);
-        }
-
-        if (!background.match(colorRe)) {
-            throw new Error(`Unexpected format for --theia-layout-color0 (${background})`);
-        }
-
-        return {
-            foreground,
-            background,
-            selection
-        };
     }
 
     /**
@@ -288,18 +310,23 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         }
     }
     protected onFitRequest(msg: Message): void {
+        super.onFitRequest(msg);
         MessageLoop.sendMessage(this, Widget.ResizeMessage.UnknownSize);
     }
     protected onActivateRequest(msg: Message): void {
+        super.onActivateRequest(msg);
         this.term.focus();
     }
     protected onAfterShow(msg: Message): void {
+        super.onAfterShow(msg);
         this.update();
     }
     protected onAfterAttach(msg: Message): void {
+        super.onAfterAttach(msg);
         this.update();
     }
     protected onResize(msg: Widget.ResizeMessage): void {
+        super.onResize(msg);
         this.needsResize = true;
         this.update();
     }
@@ -321,6 +348,10 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         }
     }
 
+    // Device status code emitted by Xterm.js
+    // Check: https://github.com/xtermjs/xterm.js/blob/release/3.14/src/InputHandler.ts#L1055-L1082
+    protected readonly deviceStatusCodes = new Set(['\u001B[>0;276;0c', '\u001B[>85;95;0c', '\u001B[>83;40003;0c', '\u001B[?1;2c', '\u001B[?6c']);
+
     protected connectTerminalProcess(): void {
         if (typeof this.terminalId !== 'number') {
             return;
@@ -334,9 +365,15 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
             onConnection: connection => {
                 connection.onNotification('onData', (data: string) => this.write(data));
 
-                const sendData = (data?: string) => data && connection.sendRequest('write', data);
-                this.term.on('data', sendData);
-                connection.onDispose(() => this.term.off('data', sendData));
+                // Excludes the device status code emitted by Xterm.js
+                const sendData = (data?: string) => {
+                    if (data && !this.deviceStatusCodes.has(data)) {
+                        return connection.sendRequest('write', data);
+                    }
+                };
+
+                const disposable = this.term.onData(sendData);
+                connection.onDispose(() => disposable.dispose());
 
                 this.toDisposeOnConnect.push(connection);
                 connection.listen();
@@ -409,7 +446,8 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
     }
 
     protected resizeTerminalProcess(): void {
-        if (typeof this.terminalId !== 'number') {
+        if (!IBaseTerminalServer.validateId(this.terminalId)
+            && !this.terminalService.getById(this.id)) {
             return;
         }
         const { cols, rows } = this.term;
@@ -436,6 +474,11 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         }
         return true;
     }
+
+    protected get copyOnSelection(): boolean {
+        return this.preferences['terminal.integrated.copyOnSelection'];
+    }
+
     protected attachCustomKeyEventHandler(): void {
         this.term.attachCustomKeyEventHandler(e => this.customKeyHandler(e));
     }

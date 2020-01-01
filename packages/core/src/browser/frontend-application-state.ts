@@ -14,9 +14,10 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { injectable } from 'inversify';
+import { injectable, inject } from 'inversify';
 import { Emitter, Event } from '../common/event';
 import { Deferred } from '../common/promise-util';
+import { ILogger } from '../common/logger';
 
 export type FrontendApplicationState =
     'init'
@@ -29,6 +30,9 @@ export type FrontendApplicationState =
 @injectable()
 export class FrontendApplicationStateService {
 
+    @inject(ILogger)
+    protected readonly logger: ILogger;
+
     private _state: FrontendApplicationState = 'init';
 
     protected deferred: { [state: string]: Deferred<void> } = {};
@@ -40,12 +44,16 @@ export class FrontendApplicationStateService {
 
     set state(state: FrontendApplicationState) {
         if (state !== this._state) {
-            this.deferred[this._state] = new Deferred();
+            if (this.deferred[this._state] === undefined) {
+                this.deferred[this._state] = new Deferred();
+            }
+            const oldState = this._state;
             this._state = state;
             if (this.deferred[state] === undefined) {
                 this.deferred[state] = new Deferred();
             }
             this.deferred[state].resolve();
+            this.logger.info(`Changed application state from '${oldState}' to '${this._state}'.`);
             this.stateChanged.fire(state);
         }
     }

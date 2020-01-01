@@ -49,15 +49,16 @@ export class PreferencesDecorator implements TreeDecorator {
             const preferenceName = Object.keys(m)[0];
             const preferenceValue = m[preferenceName];
             const storedValue = this.preferencesService.get(preferenceName, undefined, this.activeFolderUri);
+            const description = this.getDescription(preferenceValue);
             return [preferenceName, {
-                tooltip: preferenceValue.description,
+                tooltip: this.buildTooltip(preferenceValue),
                 captionSuffixes: [
                     {
-                        data: `: ${this.getPreferenceDisplayValue(storedValue, preferenceValue.default)}`
+                        data: `: ${this.getPreferenceDisplayValue(storedValue, preferenceValue.defaultValue)}`
                     },
                     {
-                        data: ' ' + preferenceValue.description,
-                        fontData: { color: 'var(--theia-ui-font-color2)' }
+                        data: ' ' + description,
+                        fontData: { color: 'var(--theia-descriptionForeground)' }
                     }]
             }] as [string, TreeDecoration.Data];
         }));
@@ -68,7 +69,7 @@ export class PreferencesDecorator implements TreeDecorator {
         return this.preferencesDecorations;
     }
 
-    setActiveFolder(folder: string) {
+    setActiveFolder(folder: string): void {
         this.activeFolderUri = folder;
         this.fireDidChangeDecorations(this.preferences);
     }
@@ -82,5 +83,54 @@ export class PreferencesDecorator implements TreeDecorator {
             return storedValue;
         }
         return defaultValue;
+    }
+
+    private buildTooltip(data: PreferenceDataProperty): string {
+        let tooltips: string = '';
+        if (data.description) {
+            tooltips = data.description;
+        }
+        if (data.defaultValue) {
+            tooltips += `\nDefault: ${JSON.stringify(data.defaultValue)}`;
+        } else if (data.default !== undefined) {
+            tooltips += `\nDefault: ${JSON.stringify(data.default)}`;
+        }
+        if (data.minimum) {
+            tooltips += `\nMin: ${data.minimum}`;
+        }
+        if (data.enum) {
+            tooltips += `\nAccepted Values: ${data.enum.join(', ')}`;
+        }
+        return tooltips;
+    }
+
+    /**
+     * Get the description for the preference for display purposes.
+     * @param value {PreferenceDataProperty} the preference data property.
+     * @returns the description if available.
+     */
+    private getDescription(value: PreferenceDataProperty): string {
+
+        /**
+         * Format the string for consistency and display purposes.
+         * Formatting includes:
+         * - capitalizing the string.
+         * - ensuring it ends in punctuation (`.`).
+         * @param str {string} the string to format.
+         * @returns the formatted string.
+         */
+        function format(str: string): string {
+            if (str.endsWith('.')) {
+                return str.charAt(0).toUpperCase() + str.slice(1);
+            }
+            return `${str.charAt(0).toUpperCase() + str.slice(1)}.`;
+        }
+
+        if (value.description) {
+            return format(value.description);
+        } else if (value.markdownDescription) {
+            return format(value.markdownDescription);
+        }
+        return '';
     }
 }

@@ -14,12 +14,12 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import * as theia from '@theia/plugin';
 import { CommunicationProvider } from '@theia/debug/lib/common/debug-model';
 import { DebugAdapterSessionImpl } from '@theia/debug/lib/node/debug-adapter-session';
-import { DebugProtocol } from 'vscode-debugprotocol';
+import * as theia from '@theia/plugin';
+import { IWebSocket } from 'vscode-ws-jsonrpc/lib/socket/socket';
 
-// tslint:disable
+// tslint:disable: no-any
 
 /**
  * Server debug adapter session.
@@ -27,16 +27,66 @@ import { DebugProtocol } from 'vscode-debugprotocol';
 export class PluginDebugAdapterSession extends DebugAdapterSessionImpl implements theia.DebugSession {
     readonly type: string;
     readonly name: string;
+    readonly configuration: theia.DebugConfiguration;
 
     constructor(
-        readonly id: string,
-        readonly configuration: theia.DebugConfiguration,
-        readonly communicationProvider: CommunicationProvider,
-        readonly customRequest: (command: string, args?: any) => Promise<DebugProtocol.Response>) {
+        protected readonly communicationProvider: CommunicationProvider,
+        protected readonly tracker: theia.DebugAdapterTracker,
+        protected readonly theiaSession: theia.DebugSession) {
 
-        super(id, communicationProvider);
+        super(theiaSession.id, communicationProvider);
 
-        this.type = configuration.type;
-        this.name = configuration.name;
+        this.type = theiaSession.type;
+        this.name = theiaSession.name;
+        this.configuration = theiaSession.configuration;
+    }
+
+    async start(channel: IWebSocket): Promise<void> {
+        if (this.tracker.onWillStartSession) {
+            this.tracker.onWillStartSession();
+        }
+        await super.start(channel);
+    }
+
+    async stop(): Promise<void> {
+        if (this.tracker.onWillStopSession) {
+            this.tracker.onWillStopSession();
+        }
+        await super.stop();
+    }
+
+    async customRequest(command: string, args?: any): Promise<any> {
+        return this.theiaSession.customRequest(command, args);
+    }
+
+    protected onDebugAdapterError(error: Error): void {
+        if (this.tracker.onError) {
+            this.tracker.onError(error);
+        }
+        super.onDebugAdapterError(error);
+    }
+
+    protected send(message: string): void {
+        try {
+            super.send(message);
+        } finally {
+            if (this.tracker.onDidSendMessage) {
+                this.tracker.onDidSendMessage(message);
+            }
+        }
+    }
+
+    protected write(message: string): void {
+        if (this.tracker.onWillReceiveMessage) {
+            this.tracker.onWillReceiveMessage(message);
+        }
+        super.write(message);
+    }
+
+    protected onDebugAdapterExit(exitCode: number, signal: string | undefined): void {
+        if (this.tracker.onExit) {
+            this.tracker.onExit(exitCode, signal);
+        }
+        super.onDebugAdapterExit(exitCode, signal);
     }
 }

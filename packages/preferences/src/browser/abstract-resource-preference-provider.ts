@@ -14,35 +14,33 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { inject, injectable, postConstruct } from 'inversify';
-import { JSONExt } from '@phosphor/coreutils';
-import { DisposableCollection, MaybePromise, MessageService, Resource, ResourceProvider } from '@theia/core';
-import { PreferenceProvider, PreferenceSchemaProvider, PreferenceScope, PreferenceProviderDataChange } from '@theia/core/lib/browser';
-import URI from '@theia/core/lib/common/uri';
+// tslint:disable:no-any
+
 import * as jsoncparser from 'jsonc-parser';
+import { JSONExt } from '@phosphor/coreutils/lib/json';
+import { inject, injectable, postConstruct } from 'inversify';
+import { MessageService, Resource, ResourceProvider, Disposable } from '@theia/core';
+import { PreferenceProvider, PreferenceSchemaProvider, PreferenceScope, PreferenceProviderDataChange, PreferenceService } from '@theia/core/lib/browser';
+import URI from '@theia/core/lib/common/uri';
+import { PreferenceConfigurations } from '@theia/core/lib/browser/preferences/preference-configurations';
 
 @injectable()
 export abstract class AbstractResourcePreferenceProvider extends PreferenceProvider {
 
-    // tslint:disable-next-line:no-any
     protected preferences: { [key: string]: any } = {};
     protected resource: Promise<Resource>;
-    protected toDisposeOnWorkspaceLocationChanged: DisposableCollection = new DisposableCollection();
 
+    @inject(PreferenceService) protected readonly preferenceService: PreferenceService;
     @inject(ResourceProvider) protected readonly resourceProvider: ResourceProvider;
     @inject(MessageService) protected readonly messageService: MessageService;
     @inject(PreferenceSchemaProvider) protected readonly schemaProvider: PreferenceSchemaProvider;
 
+    @inject(PreferenceConfigurations)
+    protected readonly configurations: PreferenceConfigurations;
+
     @postConstruct()
     protected async init(): Promise<void> {
-        const uri = await this.getUri();
-
-        // In case if no workspace is opened there are no workspace settings.
-        // There is nothing to contribute to preferences and we just skip it.
-        if (!uri) {
-            this._ready.resolve();
-            return;
-        }
+        const uri = this.getUri();
         this.resource = this.resourceProvider(uri);
 
         // Try to read the initial content of the preferences.  The provider
@@ -55,88 +53,109 @@ export abstract class AbstractResourcePreferenceProvider extends PreferenceProvi
         const resource = await this.resource;
         this.toDispose.push(resource);
         if (resource.onDidChangeContents) {
-            const onDidResourceChanged = resource.onDidChangeContents(() => this.readPreferences());
-            this.toDisposeOnWorkspaceLocationChanged.pushAll([onDidResourceChanged, (await this.resource)]);
-            this.toDispose.push(onDidResourceChanged);
+            this.toDispose.push(resource.onDidChangeContents(() => this.readPreferences()));
         }
+        this.toDispose.push(Disposable.create(() => this.reset()));
     }
 
-    abstract getUri(root?: URI): MaybePromise<URI | undefined>;
+    protected abstract getUri(): URI;
+    protected abstract getScope(): PreferenceScope;
 
-    // tslint:disable-next-line:no-any
+    getConfigUri(): URI;
+    getConfigUri(resourceUri: string | undefined): URI | undefined;
+    getConfigUri(resourceUri?: string): URI | undefined {
+        if (!resourceUri) {
+            return this.getUri();
+        }
+        return this.loaded && this.contains(resourceUri) ? this.getUri() : undefined;
+    }
+
+    contains(resourceUri: string | undefined): boolean {
+        if (!resourceUri) {
+            return true;
+        }
+        const domain = this.getDomain();
+        if (!domain) {
+            return true;
+        }
+        const resourcePath = new URI(resourceUri).path;
+        return domain.some(uri => new URI(uri).path.relativity(resourcePath) >= 0);
+    }
+
     getPreferences(resourceUri?: string): { [key: string]: any } {
-        return this.preferences;
+        return this.loaded && this.contains(resourceUri) ? this.preferences : {};
     }
 
-    // tslint:disable-next-line:no-any
-    async setPreference(key: string, value: any): Promise<void> {
-        const resource = await this.resource;
-        if (resource.saveContents) {
-            const content = await this.readContents();
-            const formattingOptions = { tabSize: 3, insertSpaces: true, eol: '' };
-            try {
-                const edits = jsoncparser.modify(content, this.getPath(key), value, { formattingOptions });
-                const result = jsoncparser.applyEdits(content, edits);
-
-                await resource.saveContents(result);
-            } catch (e) {
-                const message = `Failed to update the value of ${key}.`;
-                this.messageService.error(`${message} Please check if ${resource.uri.toString()} is corrupted.`);
-                console.error(`${message} ${e.toString()}`);
-                return;
-            }
-            const oldValue = this.preferences[key];
-            if (oldValue === value || oldValue !== undefined && value !== undefined // JSONExt.deepEqual() does not support handling `undefined`
-                && JSONExt.deepEqual(value, oldValue)) {
-                return;
-            }
-            this.preferences[key] = value;
-            this.emitPreferencesChangedEvent([{
-                preferenceName: key, newValue: value, oldValue, scope: this.getScope(), domain: this.getDomain()
-            }]);
+    async setPreference(key: string, value: any, resourceUri?: string): Promise<boolean> {
+        if (!this.contains(resourceUri)) {
+            return false;
         }
+        const path = this.getPath(key);
+        if (!path) {
+            return false;
+        }
+        const resource = await this.resource;
+        if (!resource.saveContents) {
+            return false;
+        }
+        const content = ((await this.readContents()) || '').trim();
+        if (!content && value === undefined) {
+            return true;
+        }
+        try {
+            let newContent = '';
+            if (path.length || value !== undefined) {
+                const formattingOptions = this.getFormattingOptions(resourceUri);
+                const edits = jsoncparser.modify(content, path, value, { formattingOptions });
+                newContent = jsoncparser.applyEdits(content, edits);
+            }
+            await resource.saveContents(newContent);
+        } catch (e) {
+            const message = `Failed to update the value of ${key}.`;
+            this.messageService.error(`${message} Please check if ${resource.uri.toString()} is corrupted.`);
+            console.error(`${message} ${e.toString()}`);
+            return false;
+        }
+        await this.readPreferences();
+        return true;
     }
 
-    protected getPath(preferenceName: string): string[] {
+    protected getPath(preferenceName: string): string[] | undefined {
         return [preferenceName];
     }
 
+    protected loaded = false;
     protected async readPreferences(): Promise<void> {
         const newContent = await this.readContents();
-        const newPrefs = await this.getParsedContent(newContent);
-        await this.handlePreferenceChanges(newPrefs);
+        this.loaded = newContent !== undefined;
+        const newPrefs = newContent ? this.getParsedContent(newContent) : {};
+        this.handlePreferenceChanges(newPrefs);
     }
 
-    protected async readContents(): Promise<string> {
+    protected async readContents(): Promise<string | undefined> {
         try {
             const resource = await this.resource;
             return await resource.readContents();
         } catch {
-            return '';
+            return undefined;
         }
     }
 
-    // tslint:disable-next-line:no-any
-    protected async getParsedContent(content: string): Promise<{ [key: string]: any }> {
+    protected getParsedContent(content: string): { [key: string]: any } {
         const jsonData = this.parse(content);
-        // tslint:disable-next-line:no-any
+
         const preferences: { [key: string]: any } = {};
         if (typeof jsonData !== 'object') {
             return preferences;
         }
-        const uri = (await this.resource).uri.toString();
         // tslint:disable-next-line:forin
         for (const preferenceName in jsonData) {
             const preferenceValue = jsonData[preferenceName];
-            if (preferenceValue !== undefined && !this.schemaProvider.validate(preferenceName, preferenceValue)) {
-                console.warn(`Preference ${preferenceName} in ${uri} is invalid.`);
-                continue;
-            }
             if (this.schemaProvider.testOverrideValue(preferenceName, preferenceValue)) {
                 // tslint:disable-next-line:forin
                 for (const overriddenPreferenceName in preferenceValue) {
-                    const overriddeValue = preferenceValue[overriddenPreferenceName];
-                    preferences[`${preferenceName}.${overriddenPreferenceName}`] = overriddeValue;
+                    const overriddenValue = preferenceValue[overriddenPreferenceName];
+                    preferences[`${preferenceName}.${overriddenPreferenceName}`] = overriddenValue;
                 }
             } else {
                 preferences[preferenceName] = preferenceValue;
@@ -145,19 +164,21 @@ export abstract class AbstractResourcePreferenceProvider extends PreferenceProvi
         return preferences;
     }
 
-    // tslint:disable-next-line:no-any
     protected parse(content: string): any {
+        content = content.trim();
+        if (!content) {
+            return undefined;
+        }
         const strippedContent = jsoncparser.stripComments(content);
         return jsoncparser.parse(strippedContent);
     }
 
-    // tslint:disable-next-line:no-any
-    protected async handlePreferenceChanges(newPrefs: { [key: string]: any }): Promise<void> {
+    protected handlePreferenceChanges(newPrefs: { [key: string]: any }): void {
         const oldPrefs = Object.assign({}, this.preferences);
         this.preferences = newPrefs;
         const prefNames = new Set([...Object.keys(oldPrefs), ...Object.keys(newPrefs)]);
         const prefChanges: PreferenceProviderDataChange[] = [];
-        const uri = (await this.resource).uri.toString();
+        const uri = this.getUri();
         for (const prefName of prefNames.values()) {
             const oldValue = oldPrefs[prefName];
             const newValue = newPrefs[prefName];
@@ -184,19 +205,47 @@ export abstract class AbstractResourcePreferenceProvider extends PreferenceProvi
         }
     }
 
-    dispose(): void {
-        const prefChanges: PreferenceProviderDataChange[] = [];
-        for (const prefName of Object.keys(this.preferences)) {
-            const value = this.preferences[prefName];
-            if (value !== undefined || value !== null) {
-                prefChanges.push({
+    protected reset(): void {
+        const preferences = this.preferences;
+        this.preferences = {};
+        const changes: PreferenceProviderDataChange[] = [];
+        for (const prefName of Object.keys(preferences)) {
+            const value = preferences[prefName];
+            if (value !== undefined) {
+                changes.push({
                     preferenceName: prefName, newValue: undefined, oldValue: value, scope: this.getScope(), domain: this.getDomain()
                 });
             }
         }
-        if (prefChanges.length > 0) {
-            this.emitPreferencesChangedEvent(prefChanges);
+        if (changes.length > 0) {
+            this.emitPreferencesChangedEvent(changes);
         }
-        super.dispose();
     }
+
+    /**
+     * Get the formatting options to be used when calling `jsoncparser`.
+     * The formatting options are based on the corresponding preference values.
+     *
+     * The formatting options should attempt to obtain the preference values from JSONC,
+     * and if necessary fallback to JSON and the global values.
+     * @param uri the preference settings URI.
+     *
+     * @returns a tuple representing the tab indentation size, and if it is spaces.
+     */
+    protected getFormattingOptions(uri?: string): jsoncparser.FormattingOptions {
+        // Get the global formatting options for both `tabSize` and `insertSpaces`.
+        const globalTabSize = this.preferenceService.get('editor.tabSize', 2, uri);
+        const globalInsertSpaces = this.preferenceService.get('editor.insertSpaces', true, uri);
+
+        // Get the superset JSON formatting options for both `tabSize` and `insertSpaces`.
+        const jsonTabSize = this.preferenceService.get('[json].editor.tabSize', globalTabSize, uri);
+        const jsonInsertSpaces = this.preferenceService.get('[json].editor.insertSpaces', globalInsertSpaces, uri);
+
+        return {
+            tabSize: this.preferenceService.get('[jsonc].editor.tabSize', jsonTabSize, uri),
+            insertSpaces: this.preferenceService.get('[jsonc].editor.insertSpaces', jsonInsertSpaces, uri),
+            eol: ''
+        };
+    }
+
 }

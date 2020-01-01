@@ -43,7 +43,7 @@ export class LocationListRenderer extends ReactRenderer {
     protected readonly handleLocationChanged = (e: React.ChangeEvent<HTMLSelectElement>) => this.onLocationChanged(e);
     protected doRender(): React.ReactNode {
         const options = this.collectLocations().map(value => this.renderLocation(value));
-        return <select className={LocationListRenderer.Styles.LOCATION_LIST_CLASS} onChange={this.handleLocationChanged}>{...options}</select>;
+        return <select className={'theia-select ' + LocationListRenderer.Styles.LOCATION_LIST_CLASS} onChange={this.handleLocationChanged}>{...options}</select>;
     }
 
     /**
@@ -69,7 +69,7 @@ export class LocationListRenderer extends ReactRenderer {
                 } else {
                     // This is necessary for Windows to be able to show `/e:/` as a drive and `c:` as "non-drive" in the same way.
                     // `URI.path.toString()` Vs. `URI.displayName` behaves a bit differently on Windows.
-                    // https://github.com/theia-ide/theia/pull/3038#issuecomment-425944189
+                    // https://github.com/eclipse-theia/theia/pull/3038#issuecomment-425944189
                     locations[index].isDrive = true;
                 }
             });
@@ -81,7 +81,7 @@ export class LocationListRenderer extends ReactRenderer {
     /**
      * Asynchronously loads the drives (if not yet available) and triggers a UI update on success with the new values.
      */
-    protected doLoadDrives() {
+    protected doLoadDrives(): void {
         if (!this._drives) {
             this.service.drives().then(drives => {
                 // If the `drives` are empty, something already went wrong.

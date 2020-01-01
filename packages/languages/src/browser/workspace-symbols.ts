@@ -15,6 +15,7 @@
  ********************************************************************************/
 
 import { injectable, inject } from 'inversify';
+import { environment } from '@theia/application-package/lib/environment';
 import {
     PrefixQuickOpenService, QuickOpenModel, QuickOpenItem, OpenerService,
     QuickOpenMode, KeybindingContribution, KeybindingRegistry, QuickOpenHandler, QuickOpenOptions, QuickOpenContribution, QuickOpenHandlerRegistry
@@ -29,7 +30,7 @@ import { Range, Position } from 'vscode-languageserver-types';
 export class WorkspaceSymbolCommand implements QuickOpenModel, CommandContribution, KeybindingContribution, CommandHandler, QuickOpenHandler, QuickOpenContribution {
 
     readonly prefix = '#';
-    readonly description = 'Go to symbol in workspace';
+    readonly description = 'Go to Symbol in Workspace';
 
     private command: Command = {
         id: 'languages.workspace.symbol',
@@ -41,11 +42,11 @@ export class WorkspaceSymbolCommand implements QuickOpenModel, CommandContributi
         @inject(PrefixQuickOpenService) protected quickOpenService: PrefixQuickOpenService,
         @inject(SelectionService) protected selectionService: SelectionService) { }
 
-    isEnabled() {
+    isEnabled(): boolean {
         return this.languages.workspaceSymbolProviders !== undefined;
     }
 
-    execute() {
+    execute(): void {
         this.quickOpenService.open(this.prefix);
     }
 
@@ -67,10 +68,14 @@ export class WorkspaceSymbolCommand implements QuickOpenModel, CommandContributi
         commands.registerCommand(this.command, this);
     }
 
+    private isElectron(): boolean {
+        return environment.electron.is();
+    }
+
     registerKeybindings(keybindings: KeybindingRegistry): void {
         keybindings.registerKeybinding({
             command: this.command.id,
-            keybinding: 'ctrlcmd+o',
+            keybinding: this.isElectron() ? 'ctrlcmd+t' : 'ctrlcmd+o',
         });
     }
 
@@ -94,7 +99,8 @@ export class WorkspaceSymbolCommand implements QuickOpenModel, CommandContributi
 
             const workspaceProviderPromises = [];
             for (const provider of this.languages.workspaceSymbolProviders) {
-                workspaceProviderPromises.push(provider.provideWorkspaceSymbols(param, newCancellationSource.token).then(symbols => {
+                workspaceProviderPromises.push((async () => {
+                    const symbols = await provider.provideWorkspaceSymbols(param, newCancellationSource.token);
                     if (symbols && !newCancellationSource.token.isCancellationRequested) {
                         for (const symbol of symbols) {
                             items.push(this.createItem(symbol, provider, newCancellationSource.token));
@@ -102,10 +108,10 @@ export class WorkspaceSymbolCommand implements QuickOpenModel, CommandContributi
                         acceptor(items);
                     }
                     return symbols;
-                }));
+                })());
             }
             Promise.all(workspaceProviderPromises.map(p => p.then(sym => sym, _ => undefined))).then(symbols => {
-                const filteredSymbols = symbols.filter(el => el !== undefined && el.length !== 0);
+                const filteredSymbols = symbols.filter(el => el && el.length !== 0);
                 if (filteredSymbols.length === 0) {
                     items.push(new QuickOpenItem({
                         label: lookFor.length === 0 ? 'Type to search for symbols' : 'No symbols matching',

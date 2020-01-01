@@ -17,8 +17,8 @@
 import { Position, Range, Location } from 'vscode-languageserver-types';
 import * as lsp from 'vscode-languageserver-types';
 import URI from '@theia/core/lib/common/uri';
-import { Event, Disposable } from '@theia/core/lib/common';
-import { Saveable } from '@theia/core/lib/browser';
+import { Event, Disposable, TextDocumentContentChangeDelta } from '@theia/core/lib/common';
+import { Saveable, Navigatable } from '@theia/core/lib/browser';
 import { EditorDecoration } from './decorations';
 
 export {
@@ -33,19 +33,8 @@ export interface TextEditorDocument extends lsp.TextDocument, Saveable, Disposab
     getLineMaxColumn(lineNumber: number): number;
 }
 
-export interface TextDocumentContentChangeDelta extends lsp.TextDocumentContentChangeEvent {
-    readonly range: Range;
-    readonly rangeLength: number;
-}
-
-export namespace TextDocumentContentChangeDelta {
-
-    // tslint:disable-next-line:no-any
-    export function is(arg: any): arg is TextDocumentContentChangeDelta {
-        return !!arg && typeof arg['text'] === 'string' && typeof arg['rangeLength'] === 'number' && Range.is(arg['range']);
-    }
-
-}
+// Refactoring
+export { TextDocumentContentChangeDelta };
 
 export interface TextDocumentChangeEvent {
     readonly document: TextEditorDocument;
@@ -119,7 +108,7 @@ export interface MouseTarget {
     /**
      * The target element
      */
-    readonly element: Element;
+    readonly element?: Element;
     /**
      * The target type
      */
@@ -148,7 +137,20 @@ export interface EditorMouseEvent {
     readonly target: MouseTarget;
 }
 
-export interface TextEditor extends Disposable, TextEditorSelection {
+export const enum EncodingMode {
+
+    /**
+     * Instructs the encoding support to encode the current input with the provided encoding
+     */
+    Encode,
+
+    /**
+     * Instructs the encoding support to decode the current input with the provided encoding
+     */
+    Decode
+}
+
+export interface TextEditor extends Disposable, TextEditorSelection, Navigatable {
     readonly node: HTMLElement;
 
     readonly uri: URI;
@@ -167,6 +169,9 @@ export interface TextEditor extends Disposable, TextEditorSelection {
     readonly onFocusChanged: Event<boolean>;
 
     readonly onMouseDown: Event<EditorMouseEvent>;
+
+    readonly onScrollChanged: Event<void>;
+    getVisibleRanges(): Range[];
 
     revealPosition(position: Position, options?: RevealPositionOptions): void;
     revealRange(range: Range, options?: RevealRangeOptions): void;
@@ -216,6 +221,18 @@ export interface TextEditor extends Disposable, TextEditorSelection {
     detectLanguage(): void;
     setLanguage(languageId: string): void;
     readonly onLanguageChanged: Event<string>;
+
+    /**
+     * Gets the encoding of the input if known.
+     */
+    getEncoding(): string;
+
+    /**
+     * Sets the encoding for the input for saving.
+     */
+    setEncoding(encoding: string, mode: EncodingMode): void;
+
+    readonly onEncodingChanged: Event<string>;
 }
 
 export interface Dimension {

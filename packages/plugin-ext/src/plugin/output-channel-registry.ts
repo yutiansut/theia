@@ -14,13 +14,13 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 import {
-    PLUGIN_RPC_CONTEXT as Ext, OutputChannelRegistryMain
-} from '../api/plugin-api';
-import { RPCProtocol } from '../api/rpc-protocol';
+    PLUGIN_RPC_CONTEXT as Ext, OutputChannelRegistryMain, PluginInfo, OutputChannelRegistryExt
+} from '../common/plugin-api-rpc';
+import { RPCProtocol } from '../common/rpc-protocol';
 import * as theia from '@theia/plugin';
 import { OutputChannelImpl } from './output-channel/output-channel-item';
 
-export class OutputChannelRegistryExt {
+export class OutputChannelRegistryExtImpl implements OutputChannelRegistryExt {
 
     proxy: OutputChannelRegistryMain;
 
@@ -28,12 +28,12 @@ export class OutputChannelRegistryExt {
         this.proxy = rpc.getProxy(Ext.OUTPUT_CHANNEL_REGISTRY_MAIN);
     }
 
-    createOutputChannel(name: string): theia.OutputChannel {
+    createOutputChannel(name: string, pluginInfo: PluginInfo): theia.OutputChannel {
         name = name.trim();
         if (!name) {
             throw new Error('illegal argument \'name\'. must not be falsy');
         } else {
-            return new OutputChannelImpl(name, this.proxy);
+            return new OutputChannelImpl(name, this.proxy, pluginInfo);
         }
     }
 }

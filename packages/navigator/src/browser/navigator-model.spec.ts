@@ -36,6 +36,7 @@ import { createMockPreferenceProxy } from '@theia/core/lib/browser/preferences/t
 import { expect } from 'chai';
 import URI from '@theia/core/lib/common/uri';
 import * as sinon from 'sinon';
+import { FrontendApplicationStateService } from '@theia/core/lib/browser/frontend-application-state';
 
 disableJSDOM();
 
@@ -158,6 +159,7 @@ describe('FileNavigatorModel', () => {
         mockTreeNavigationService = sinon.createStubInstance(TreeNavigationService);
         mockTreeSearch = sinon.createStubInstance(TreeSearch);
         mockPreferences = createMockPreferenceProxy({});
+        const mockApplicationStateService = sinon.createStubInstance(FrontendApplicationStateService);
 
         testContainer = new Container();
         testContainer.bind(FileNavigatorModel).toSelf().inSingletonScope();
@@ -174,6 +176,7 @@ describe('FileNavigatorModel', () => {
         testContainer.bind(TreeNavigationService).toConstantValue(mockTreeNavigationService);
         testContainer.bind(TreeSearch).toConstantValue(mockTreeSearch);
         testContainer.bind(CorePreferences).toConstantValue(mockPreferences);
+        testContainer.bind(FrontendApplicationStateService).toConstantValue(mockApplicationStateService);
 
         sinon.stub(mockWorkspaceService, 'onWorkspaceChanged').value(mockWorkspaceServiceEmitter.event);
         sinon.stub(mockWorkspaceService, 'onWorkspaceLocationChanged').value(mockWorkspaceOnLocationChangeEmitter.event);
@@ -192,13 +195,6 @@ describe('FileNavigatorModel', () => {
         toRestore.length = 0;
     });
 
-    it('should update the root(s) on receiving a WorkspaceChanged event from the WorkspaceService', done => {
-        sinon.stub(navigatorModel, 'updateRoot').callsFake(() => {
-            done(); // This test would time out if updateRoot() is not called
-        });
-        mockWorkspaceServiceEmitter.fire([]);
-    }).timeout(2000);
-
     describe('updateRoot() function', () => {
         it('should assign "this.root" a WorkspaceNode with WorkspaceRootNodes (one for each root folder in the workspace) as its children', async () => {
             sinon.stub(mockWorkspaceService, 'roots').value([folderA, folderB]);
@@ -212,7 +208,7 @@ describe('FileNavigatorModel', () => {
                 })
             );
 
-            await navigatorModel.updateRoot();
+            await navigatorModel['updateRoot']();
             const thisRoot = navigatorModel['root'] as WorkspaceNode;
             expect(thisRoot).not.to.be.undefined;
             expect(thisRoot.children.length).to.eq(2);
@@ -223,7 +219,7 @@ describe('FileNavigatorModel', () => {
         it('should assign "this.root" undefined if there is no workspace open', async () => {
             sinon.stub(mockWorkspaceService, 'opened').value(false);
 
-            await navigatorModel.updateRoot();
+            await navigatorModel['updateRoot']();
             const thisRoot = navigatorModel['root'] as WorkspaceNode;
             expect(thisRoot).to.be.undefined;
         });

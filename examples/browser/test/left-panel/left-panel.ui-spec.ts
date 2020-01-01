@@ -33,9 +33,9 @@ before(() => {
 });
 
 describe('theia left panel', () => {
-    it("should show 'Explorer' and 'Git'", () => {
+    it("should show 'Explorer' and 'SCM'", () => {
         expect(leftPanel.doesTabExist('Explorer')).to.be.true;
-        expect(leftPanel.doesTabExist('Git')).to.be.true;
+        expect(leftPanel.doesTabExist('Source Control')).to.be.true;
     });
 
     describe('files tab', () => {
@@ -50,15 +50,15 @@ describe('theia left panel', () => {
         });
     });
 
-    describe('git tab', () => {
-        it('should open/close the git tab', () => {
-            leftPanel.openCloseTab('Git');
-            expect(leftPanel.isGitContainerVisible()).to.be.true;
-            expect(leftPanel.isTabActive('Git')).to.be.true;
+    describe('SCM tab', () => {
+        it('should open/close the SCM tab', () => {
+            leftPanel.openCloseTab('Source Control');
+            expect(leftPanel.isScmContainerVisible()).to.be.true;
+            expect(leftPanel.isTabActive('Source Control')).to.be.true;
 
-            leftPanel.openCloseTab('Git');
-            expect(leftPanel.isGitContainerVisible()).to.be.false;
-            expect(leftPanel.isTabActive('Git')).to.be.false;
+            leftPanel.openCloseTab('Source Control');
+            expect(leftPanel.isScmContainerVisible()).to.be.false;
+            expect(leftPanel.isTabActive('Source Control')).to.be.false;
         });
     });
 });

@@ -15,7 +15,7 @@
  ********************************************************************************/
 
 import { injectable, inject, named } from 'inversify';
-import { TextDocumentContentChangeEvent } from 'vscode-languageserver-types';
+import { TextDocumentContentChangeEvent } from 'vscode-languageserver-protocol';
 import URI from '../common/uri';
 import { ContributionProvider } from './contribution-provider';
 import { Event, Emitter } from './event';
@@ -30,12 +30,13 @@ export interface Resource extends Disposable {
     saveContents?(content: string, options?: { encoding?: string }): Promise<void>;
     saveContentChanges?(changes: TextDocumentContentChangeEvent[], options?: { encoding?: string }): Promise<void>;
     readonly onDidChangeContents?: Event<void>;
+    guessEncoding?(): Promise<string | undefined>
 }
 export namespace Resource {
     export interface SaveContext {
         content: string
         changes?: TextDocumentContentChangeEvent[]
-        options?: { encoding?: string }
+        options?: { encoding?: string, overwriteEncoding?: string }
     }
     export async function save(resource: Resource, context: SaveContext, token?: CancellationToken): Promise<void> {
         if (!resource.saveContents) {
@@ -166,10 +167,11 @@ export class InMemoryResources implements ResourceResolver {
         return resource;
     }
 
-    resolve(uri: URI): MaybePromise<Resource> {
-        if (!this.resources.has(uri.toString())) {
-            throw new Error('Resource does not exist.');
+    resolve(uri: URI): Resource {
+        const uriString = uri.toString();
+        if (!this.resources.has(uriString)) {
+            throw new Error(`In memory '${uriString}' resource does not exist.`);
         }
-        return this.resources.get(uri.toString())!;
+        return this.resources.get(uriString)!;
     }
 }

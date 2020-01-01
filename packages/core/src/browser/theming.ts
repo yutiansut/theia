@@ -14,19 +14,17 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { injectable, inject } from 'inversify';
-import { CommandRegistry, CommandContribution, CommandHandler, Command } from '../common/command';
 import { Emitter, Event } from '../common/event';
-import { QuickOpenModel, QuickOpenItem, QuickOpenMode } from './quick-open/quick-open-model';
-import { QuickOpenService } from './quick-open/quick-open-service';
+import { Disposable } from '../common/disposable';
 import { FrontendApplicationConfigProvider } from './frontend-application-config-provider';
-import { MenuContribution, MenuModelRegistry } from '../common/';
-import { CommonMenus } from './common-frontend-contribution';
 
 export const ThemeServiceSymbol = Symbol('ThemeService');
 
+export type ThemeType = 'light' | 'dark' | 'hc';
+
 export interface Theme {
     readonly id: string;
+    readonly type: ThemeType;
     readonly label: string;
     readonly description?: string;
     readonly editorTheme?: string;
@@ -60,9 +58,29 @@ export class ThemeService {
         global[ThemeServiceSymbol] = this;
     }
 
-    register(...themes: Theme[]): void {
+    register(...themes: Theme[]): Disposable {
         for (const theme of themes) {
             this.themes[theme.id] = theme;
+        }
+        this.validateActiveTheme();
+        return Disposable.create(() => {
+            for (const theme of themes) {
+                delete this.themes[theme.id];
+            }
+            this.validateActiveTheme();
+        });
+    }
+
+    protected validateActiveTheme(): void {
+        if (!this.activeTheme) {
+            return;
+        }
+        const theme = this.themes[this.activeTheme.id];
+        if (!theme) {
+            this.loadUserTheme();
+        } else if (theme !== this.activeTheme) {
+            this.activeTheme = undefined;
+            this.setCurrentTheme(theme.id);
         }
     }
 
@@ -128,103 +146,54 @@ export class ThemeService {
 
 }
 
-@injectable()
-export class ThemingCommandContribution implements CommandContribution, MenuContribution, CommandHandler, Command, QuickOpenModel {
-
-    id = 'change_theme';
-    category = 'Settings';
-    label = 'Change Color Theme';
-    private resetTo: string | undefined;
-
-    @inject(ThemeService)
-    protected readonly themeService: ThemeService;
-
-    @inject(QuickOpenService)
-    protected readonly openService: QuickOpenService;
-
-    registerCommands(commands: CommandRegistry): void {
-        commands.registerCommand(this, this);
-    }
-
-    registerMenus(menus: MenuModelRegistry) {
-        menus.registerMenuAction(CommonMenus.FILE_SETTINGS_SUBMENU_THEME, {
-            commandId: this.id,
-            label: this.label,
-            order: 'a30'
-        });
-    }
-
-    execute() {
-        this.resetTo = this.themeService.getCurrentTheme().id;
-        this.openService.open(this, {
-            placeholder: 'Select Color Theme (Up/Down Keys to Preview)',
-            fuzzyMatchLabel: true,
-            selectIndex: () => this.activeIndex(),
-            onClose: () => {
-                if (this.resetTo) {
-                    this.themeService.setCurrentTheme(this.resetTo);
-                }
-            }
-        });
-    }
-
-    private activeIndex() {
-        const current = this.themeService.getCurrentTheme().id;
-        const themes = this.themeService.getThemes();
-        return themes.findIndex(theme => theme.id === current);
-    }
-
-    onType(lookFor: string, acceptor: (items: QuickOpenItem[]) => void): void {
-        const items = this.themeService.getThemes().map(t =>
-            new QuickOpenItem({
-                label: t.label,
-                description: t.description,
-                run: (mode: QuickOpenMode) => {
-                    if (mode === QuickOpenMode.OPEN) {
-                        this.resetTo = undefined;
-                    }
-                    this.themeService.setCurrentTheme(t.id);
-                    return true;
-                }
-            }));
-        acceptor(items);
-    }
-}
-
 export class BuiltinThemeProvider {
 
     // Webpack converts these `require` in some Javascript object that wraps the `.css` files
     static readonly darkCss = require('../../src/browser/style/variables-dark.useable.css');
     static readonly lightCss = require('../../src/browser/style/variables-bright.useable.css');
 
-    static readonly darkTheme = {
+    static readonly darkTheme: Theme = {
         id: 'dark',
-        label: 'Dark Theme',
-        description: 'Bright fonts on dark backgrounds.',
-        editorTheme: 'vs-dark',
-        activate() {
+        type: 'dark',
+        label: 'Dark (Theia)',
+        editorTheme: 'dark-theia', // loaded in /packages/monaco/src/browser/textmate/monaco-theme-registry.ts
+        activate(): void {
             BuiltinThemeProvider.darkCss.use();
         },
-        deactivate() {
+        deactivate(): void {
             BuiltinThemeProvider.darkCss.unuse();
         }
     };
 
-    static readonly lightTheme = {
+    static readonly lightTheme: Theme = {
         id: 'light',
-        label: 'Light Theme',
-        description: 'Dark fonts on light backgrounds.',
-        editorTheme: 'vs',
-        activate() {
+        type: 'light',
+        label: 'Light (Theia)',
+        editorTheme: 'light-theia', // loaded in /packages/monaco/src/browser/textmate/monaco-theme-registry.ts
+        activate(): void {
             BuiltinThemeProvider.lightCss.use();
         },
-        deactivate() {
+        deactivate(): void {
             BuiltinThemeProvider.lightCss.unuse();
+        }
+    };
+
+    static readonly hcTheme: Theme = {
+        id: 'hc-theia',
+        type: 'hc',
+        label: 'High Contrast (Theia)',
+        editorTheme: 'hc-theia', // loaded in /packages/monaco/src/browser/textmate/monaco-theme-registry.ts
+        activate(): void {
+            BuiltinThemeProvider.darkCss.use();
+        },
+        deactivate(): void {
+            BuiltinThemeProvider.darkCss.unuse();
         }
     };
 
     static readonly themes = [
         BuiltinThemeProvider.darkTheme,
         BuiltinThemeProvider.lightTheme,
+        BuiltinThemeProvider.hcTheme
     ];
 }

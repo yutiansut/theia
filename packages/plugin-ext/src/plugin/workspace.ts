@@ -29,10 +29,10 @@ import {
     WorkspaceMain,
     PLUGIN_RPC_CONTEXT as Ext,
     MainMessageType
-} from '../api/plugin-api';
+} from '../common/plugin-api-rpc';
 import { Path } from '@theia/core/lib/common/path';
-import { RPCProtocol } from '../api/rpc-protocol';
-import { WorkspaceRootsChangeEvent, FileChangeEvent, FileMoveEvent, FileWillMoveEvent } from '../api/model';
+import { RPCProtocol } from '../common/rpc-protocol';
+import { WorkspaceRootsChangeEvent, FileChangeEvent, FileMoveEvent, FileWillMoveEvent } from '../common/plugin-api-rpc-model';
 import { EditorsAndDocumentsExtImpl } from './editors-and-documents';
 import { InPluginFileSystemWatcherProxy } from './in-plugin-filesystem-watcher-proxy';
 import URI from 'vscode-uri';
@@ -71,7 +71,7 @@ export class WorkspaceExtImpl implements WorkspaceExt {
     }
 
     get name(): string | undefined {
-        if (this.workspaceFolders) {
+        if (this.workspaceFolders && this.workspaceFolders.length > 0) {
             return new Path(this.workspaceFolders[0].uri.path).base;
         }
 
@@ -161,7 +161,7 @@ export class WorkspaceExtImpl implements WorkspaceExt {
         }
 
         return this.proxy.$startFileSearch(includePattern, includeFolderUri, excludePatternOrDisregardExcludes, maxResults, token)
-            .then(data => Array.isArray(data) ? data.map(URI.revive) : []);
+            .then(data => Array.isArray(data) ? data.map(uri => URI.revive(uri)) : []);
     }
 
     createFileSystemWatcher(globPattern: theia.GlobPattern, ignoreCreateEvents?: boolean, ignoreChangeEvents?: boolean, ignoreDeleteEvents?: boolean): theia.FileSystemWatcher {
@@ -197,7 +197,7 @@ export class WorkspaceExtImpl implements WorkspaceExt {
 
         const instance = this;
         return {
-            dispose() {
+            dispose(): void {
                 if (instance.documentContentProviders.delete(scheme)) {
                     instance.proxy.$unregisterTextDocumentContentProvider(scheme);
                 }
@@ -344,7 +344,7 @@ export class WorkspaceExtImpl implements WorkspaceExt {
         return true;
     }
 
-    // Experimental API https://github.com/theia-ide/theia/issues/4167
+    // Experimental API https://github.com/eclipse-theia/theia/issues/4167
     private workspaceWillRenameFileEmitter = new Emitter<theia.FileWillRenameEvent>();
     private workspaceDidRenameFileEmitter = new Emitter<theia.FileRenameEvent>();
 
@@ -358,7 +358,7 @@ export class WorkspaceExtImpl implements WorkspaceExt {
      */
     public readonly onDidRenameFile: Event<theia.FileRenameEvent> = this.workspaceDidRenameFileEmitter.event;
 
-    $onFileRename(event: FileMoveEvent) {
+    $onFileRename(event: FileMoveEvent): void {
         this.workspaceDidRenameFileEmitter.fire(Object.freeze({ oldUri: URI.revive(event.oldUri), newUri: URI.revive(event.newUri) }));
     }
 

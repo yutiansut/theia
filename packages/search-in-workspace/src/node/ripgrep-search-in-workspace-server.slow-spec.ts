@@ -66,7 +66,7 @@ class ResultAccumulator implements SearchInWorkspaceClient {
 }
 
 // Create a test file relative to rootDir.
-function createTestFile(filename: string, text: string) {
+function createTestFile(filename: string, text: string): void {
     const dir = getRootPathFromName(filename);
     fs.writeFileSync(path.join(dir, filename), text);
     fileLines.set(filename, text.split('\n'));
@@ -77,6 +77,7 @@ const getRootPathFromName = (name: string) => {
     const names: { [file: string]: string } = {
         carrots: rootDirA,
         potatoes: rootDirA,
+        pastas: rootDirA,
         regexes: rootDirA,
         small: `${rootDirA}/small`,
         'file:with:some:colons': rootDirA,
@@ -110,6 +111,8 @@ Carrot is a funny word.
 Potatoes, unlike carrots, are generally not orange.  But sweet potatoes are,
 it's very confusing.
 `);
+
+    createTestFile('pastas', 'pasta pasta');
 
     createTestFile('regexes', `\
 aaa hello. x h3lo y hell0h3lllo
@@ -204,7 +207,7 @@ after(() => {
 // The expected entries should also have the file field set relatively to
 // rootDir.  This function will update the field to contain the absolute path.
 
-function compareSearchResults(expected: SearchInWorkspaceResult[], actual: SearchInWorkspaceResult[]) {
+function compareSearchResults(expected: SearchInWorkspaceResult[], actual: SearchInWorkspaceResult[]): void {
     expect(actual.length).eq(expected.length);
 
     if (actual.length !== expected.length) {
@@ -228,8 +231,36 @@ function compareSearchResults(expected: SearchInWorkspaceResult[], actual: Searc
     }
 }
 
-describe('ripgrep-search-in-workspace-server', function () {
+describe('ripgrep-search-in-workspace-server', function (): void {
     this.timeout(10000);
+
+    it('should return 1 result when searching for " pasta", respecting the leading whitespace', done => {
+        const pattern = ' pasta';
+
+        const client = new ResultAccumulator(() => {
+            const expected: SearchInWorkspaceResult[] = [
+                { root: rootDirAUri, fileUri: 'pastas', line: 1, character: 6, length: pattern.length, lineText: '' },
+            ];
+            compareSearchResults(expected, client.results);
+            done();
+        });
+        ripgrepServer.setClient(client);
+        ripgrepServer.search(pattern, [rootDirAUri]);
+    });
+
+    it('should return 1 result when searching for "pasta", respecting the trailing whitespace', done => {
+        const pattern = 'pasta ';
+
+        const client = new ResultAccumulator(() => {
+            const expected: SearchInWorkspaceResult[] = [
+                { root: rootDirAUri, fileUri: 'pastas', line: 1, character: 1, length: pattern.length, lineText: '' },
+            ];
+            compareSearchResults(expected, client.results);
+            done();
+        });
+        ripgrepServer.setClient(client);
+        ripgrepServer.search(pattern, [rootDirAUri]);
+    });
 
     // Try some simple patterns with different case.
     it('should return 7 results when searching for "carrot"', done => {
@@ -715,7 +746,7 @@ describe('ripgrep-search-in-workspace-server', function () {
         ripgrepServer.search(pattern, [rootDirAUri, rootSubdirAUri]);
     });
 
-    it('fails gracefully when rg isn\'t found', async function () {
+    it('fails gracefully when rg isn\'t found', async function (): Promise<void> {
         const errorString = await new Promise<string>((resolve, reject) => {
             const rgServer = createInstance('/non-existent/rg');
 
@@ -733,7 +764,7 @@ describe('ripgrep-search-in-workspace-server', function () {
         expect(errorString).contains('could not find the ripgrep (rg) binary');
     });
 
-    it('fails gracefully when rg isn\'t executable', async function () {
+    it('fails gracefully when rg isn\'t executable', async function (): Promise<void> {
         const errorString = await new Promise<string>((resolve, reject) => {
             // Create temporary file, ensure it is not executable.
             const rg = temp.openSync();

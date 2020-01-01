@@ -14,8 +14,8 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { SELECTED_CLASS, Key } from '@theia/core/lib/browser';
-import { GitFileStatus, Repository, GitFileChange } from '../common';
+import { SELECTED_CLASS, Key, Widget } from '@theia/core/lib/browser';
+import { GitFileStatus } from '../common';
 import URI from '@theia/core/lib/common/uri';
 import { GitRepositoryProvider } from './git-repository-provider';
 import { LabelProvider } from '@theia/core/lib/browser/label-provider';
@@ -24,6 +24,8 @@ import { ElementExt } from '@phosphor/domutils';
 import { inject, injectable } from 'inversify';
 import { ReactWidget } from '@theia/core/lib/browser/widgets/react-widget';
 import * as React from 'react';
+import { GitFileChangeLabelProvider } from './git-file-change-label-provider';
+import { GitFileChangeNode } from './git-file-change-node';
 
 @injectable()
 export abstract class GitNavigableListWidget<T extends { selected?: boolean }> extends ReactWidget {
@@ -33,6 +35,8 @@ export abstract class GitNavigableListWidget<T extends { selected?: boolean }> e
 
     @inject(GitRepositoryProvider) protected readonly repositoryProvider: GitRepositoryProvider;
     @inject(LabelProvider) protected readonly labelProvider: LabelProvider;
+    @inject(GitFileChangeLabelProvider)
+    protected readonly gitLabelProvider: GitFileChangeLabelProvider;
 
     constructor() {
         super();
@@ -61,55 +65,40 @@ export abstract class GitNavigableListWidget<T extends { selected?: boolean }> e
         (async () => {
             const selected = this.node.getElementsByClassName(SELECTED_CLASS)[0];
             if (selected) {
-                ElementExt.scrollIntoViewIfNeeded(this.node, selected);
+                const container = document.getElementById(this.scrollContainer);
+                if (container) {
+                    ElementExt.scrollIntoViewIfNeeded(container, selected);
+                }
             }
         })();
     }
 
-    protected getStatusCaption(status: GitFileStatus, staged?: boolean): string {
-        return GitFileStatus.toString(status, staged);
+    protected onResize(msg: Widget.ResizeMessage): void {
+        super.onResize(msg);
+        this.update();
     }
 
     protected getAbbreviatedStatusCaption(status: GitFileStatus, staged?: boolean): string {
         return GitFileStatus.toAbbreviation(status, staged);
     }
-
-    protected relativePath(uri: URI | string): string {
-        const parsedUri = typeof uri === 'string' ? new URI(uri) : uri;
-        const repo = this.repositoryProvider.findRepository(parsedUri);
-        if (repo) {
-            return Repository.relativePath(repo, parsedUri).toString();
-        } else {
-            return this.labelProvider.getLongName(parsedUri);
-        }
-    }
-
     protected getRepositoryLabel(uri: string): string | undefined {
         const repository = this.repositoryProvider.findRepository(new URI(uri));
         const isSelectedRepo = this.repositoryProvider.selectedRepository && repository && this.repositoryProvider.selectedRepository.localUri === repository.localUri;
         return repository && !isSelectedRepo ? this.labelProvider.getLongName(new URI(repository.localUri)) : undefined;
     }
 
-    protected computeCaption(fileChange: GitFileChange): string {
-        let result = `${this.relativePath(fileChange.uri)} - ${this.getStatusCaption(fileChange.status, true)}`;
-        if (fileChange.oldUri) {
-            result = `${this.relativePath(fileChange.oldUri)} -> ${result}`;
-        }
-        return result;
-    }
-
-    protected renderHeaderRow({ name, value, classNames }: { name: string, value: React.ReactNode, classNames?: string[] }): React.ReactNode {
+    protected renderHeaderRow({ name, value, classNames, title }: { name: string, value: React.ReactNode, classNames?: string[], title?: string }): React.ReactNode {
         if (!value) {
             return;
         }
         const className = ['header-row', ...(classNames || [])].join(' ');
-        return <div key={name} className={className}>
+        return <div key={name} className={className} title={title}>
             <div className='theia-header'>{name}</div>
             <div className='header-value'>{value}</div>
         </div>;
     }
 
-    protected addGitListNavigationKeyListeners(container: HTMLElement) {
+    protected addGitListNavigationKeyListeners(container: HTMLElement): void {
         this.addKeyListener(container, Key.ARROW_LEFT, () => this.navigateLeft());
         this.addKeyListener(container, Key.ARROW_RIGHT, () => this.navigateRight());
         this.addKeyListener(container, Key.ARROW_UP, () => this.navigateUp());
@@ -141,7 +130,7 @@ export abstract class GitNavigableListWidget<T extends { selected?: boolean }> e
         return this.gitNodes ? this.gitNodes.find(c => c.selected || false) : undefined;
     }
 
-    protected selectNode(node: T) {
+    protected selectNode(node: T): void {
         const n = this.getSelected();
         if (n) {
             n.selected = false;
@@ -150,7 +139,7 @@ export abstract class GitNavigableListWidget<T extends { selected?: boolean }> e
         this.update();
     }
 
-    protected selectNextNode() {
+    protected selectNextNode(): void {
         const idx = this.indexOfSelected;
         if (idx >= 0 && idx < this.gitNodes.length - 1) {
             this.selectNode(this.gitNodes[idx + 1]);
@@ -159,7 +148,7 @@ export abstract class GitNavigableListWidget<T extends { selected?: boolean }> e
         }
     }
 
-    protected selectPreviousNode() {
+    protected selectPreviousNode(): void {
         const idx = this.indexOfSelected;
         if (idx > 0) {
             this.selectNode(this.gitNodes[idx - 1]);
@@ -172,4 +161,42 @@ export abstract class GitNavigableListWidget<T extends { selected?: boolean }> e
         }
         return -1;
     }
+}
+
+export namespace GitItemComponent {
+    export interface Props {
+        labelProvider: LabelProvider;
+        gitLabelProvider: GitFileChangeLabelProvider;
+        change: GitFileChangeNode;
+        revealChange: (change: GitFileChangeNode) => void
+        selectNode: (change: GitFileChangeNode) => void
+    }
+}
+export class GitItemComponent extends React.Component<GitItemComponent.Props> {
+
+    render(): JSX.Element {
+        const { labelProvider, gitLabelProvider, change } = this.props;
+        const icon = labelProvider.getIcon(change);
+        const label = labelProvider.getName(change);
+        const description = labelProvider.getLongName(change);
+        const caption = gitLabelProvider.getCaption(change);
+        const statusCaption = gitLabelProvider.getStatusCaption(change.status, true);
+        return <div className={`gitItem noselect${change.selected ? ' ' + SELECTED_CLASS : ''}`}
+            onDoubleClick={this.revealChange}
+            onClick={this.selectNode}>
+            <span className={icon + ' file-icon'}></span>
+            <div className='noWrapInfo' title={caption} >
+                <span className='name'>{label + ' '}</span>
+                <span className='path'>{description}</span>
+            </div>
+            <div
+                title={caption}
+                className={'status staged ' + GitFileStatus[change.status].toLowerCase()}>
+                {statusCaption.charAt(0)}
+            </div>
+        </div >;
+    }
+
+    protected readonly revealChange = () => this.props.revealChange(this.props.change);
+    protected readonly selectNode = () => this.props.selectNode(this.props.change);
 }

@@ -547,6 +547,10 @@ export namespace Git {
              */
             readonly shortSha?: boolean;
 
+            /**
+             * Return only commits reached by following the first parent, giving a linear list of commits.
+             */
+            readonly firstParent?: boolean;
         }
 
         /**
@@ -580,6 +584,18 @@ export namespace Git {
              * Be more verbose and get remote url for `fetch` and `push` actions.
              */
             readonly verbose?: true,
+
+        }
+
+        /**
+         * Options for the `git rev-parse` command.
+         */
+        export interface RevParse {
+
+            /**
+             * The reference to parse.
+             */
+            readonly ref: string;
 
         }
 
@@ -796,6 +812,15 @@ export interface Git extends Disposable {
      * @param options optional configuration for further refining the `git log` command execution.
      */
     log(repository: Repository, options?: Git.Options.Log): Promise<CommitWithChanges[]>;
+
+    /**
+     * Returns the commit SHA of the given ref if the ref exists, or returns 'undefined' if the
+     * given ref does not exist.
+     *
+     * @param repository the repository where the ref may be found.
+     * @param options configuration containing the ref and optionally other properties for further refining the `git rev-parse` command execution.
+     */
+    revParse(repository: Repository, options: Git.Options.RevParse): Promise<string | undefined>;
 
     /**
      * Returns the annotations of each line in the given file.

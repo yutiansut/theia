@@ -66,9 +66,9 @@ export class MiniBrowserOpenHandler extends NavigatableWidgetOpenHandler<MiniBro
      * Instead of going to the backend with each file URI to ask whether it can handle the current file or not,
      * we have this map of extension and priority pairs that we populate at application startup.
      * The real advantage of this approach is the following: [Phosphor cannot run async code when invoking `isEnabled`/`isVisible`
-     * for the command handlers](https://github.com/theia-ide/theia/issues/1958#issuecomment-392829371)
+     * for the command handlers](https://github.com/eclipse-theia/theia/issues/1958#issuecomment-392829371)
      * so the menu item would be always visible for the user even if the file type cannot be handled eventually.
-     * Hopefully, we could get rid of this hack once we have migrated the existing Phosphor code to [React](https://github.com/theia-ide/theia/issues/1915).
+     * Hopefully, we could get rid of this hack once we have migrated the existing Phosphor code to [React](https://github.com/eclipse-theia/theia/issues/1915).
      */
     protected readonly supportedExtensions: Map<string, number> = new Map();
 
@@ -110,8 +110,12 @@ export class MiniBrowserOpenHandler extends NavigatableWidgetOpenHandler<MiniBro
     async open(uri: URI, options?: MiniBrowserOpenerOptions): Promise<MiniBrowser> {
         const widget = await super.open(uri, options);
         const area = this.shell.getAreaFor(widget);
-        if (area && area !== 'main') {
-            this.shell.resize(this.shell.mainPanel.node.offsetWidth / 2, area);
+        if (area === 'right' || area === 'left') {
+            const panelLayout = area === 'right' ? this.shell.getLayoutData().rightPanel : this.shell.getLayoutData().leftPanel;
+            const minSize = this.shell.mainPanel.node.offsetWidth / 2;
+            if (panelLayout && panelLayout.size && panelLayout.size <= minSize) {
+                requestAnimationFrame(() => this.shell.resize(minSize, area));
+            }
         }
         return widget;
     }
@@ -128,9 +132,9 @@ export class MiniBrowserOpenHandler extends NavigatableWidgetOpenHandler<MiniBro
         let result = await this.defaultOptions();
         if (uri) {
             // Decorate it with a few properties inferred from the URI.
-            const startPage = uri.toString();
+            const startPage = uri.toString(true);
             const name = this.labelProvider.getName(uri);
-            const iconClass = `${await this.labelProvider.getIcon(uri)} file-icon`;
+            const iconClass = `${this.labelProvider.getIcon(uri)} file-icon`;
             // The background has to be reset to white only for "real" web-pages but not for images, for instance.
             const resetBackground = await this.resetBackground(uri);
             result = {

@@ -16,8 +16,8 @@
 
 import * as theia from '@theia/plugin';
 import { interfaces, injectable } from 'inversify';
-import { WorkspaceExt, StorageExt, MAIN_RPC_CONTEXT, WorkspaceMain, WorkspaceFolderPickOptionsMain } from '../../api/plugin-api';
-import { RPCProtocol } from '../../api/rpc-protocol';
+import { WorkspaceExt, StorageExt, MAIN_RPC_CONTEXT, WorkspaceMain, WorkspaceFolderPickOptionsMain } from '../../common/plugin-api-rpc';
+import { RPCProtocol } from '../../common/rpc-protocol';
 import Uri from 'vscode-uri';
 import { UriComponents } from '../../common/uri-components';
 import { QuickOpenModel, QuickOpenItem, QuickOpenMode } from '@theia/core/lib/browser/quick-open/quick-open-model';
@@ -27,15 +27,16 @@ import { FileSearchService } from '@theia/file-search/lib/common/file-search-ser
 import URI from '@theia/core/lib/common/uri';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 import { Resource } from '@theia/core/lib/common/resource';
-import { Emitter, Event, Disposable, ResourceResolver } from '@theia/core';
-import { FileWatcherSubscriberOptions } from '../../api/model';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
+import { Emitter, Event, ResourceResolver } from '@theia/core';
+import { FileWatcherSubscriberOptions } from '../../common/plugin-api-rpc-model';
 import { InPluginFileSystemWatcherManager } from './in-plugin-filesystem-watcher-manager';
-import { StoragePathService } from './storage-path-service';
 import { PluginServer } from '../../common/plugin-protocol';
+import { FileSystemPreferences } from '@theia/filesystem/lib/browser';
 
-export class WorkspaceMainImpl implements WorkspaceMain {
+export class WorkspaceMainImpl implements WorkspaceMain, Disposable {
 
-    private proxy: WorkspaceExt;
+    private readonly proxy: WorkspaceExt;
 
     private storageProxy: StorageExt;
 
@@ -53,7 +54,9 @@ export class WorkspaceMainImpl implements WorkspaceMain {
 
     private workspaceService: WorkspaceService;
 
-    private storagePathService: StoragePathService;
+    private fsPreferences: FileSystemPreferences;
+
+    protected readonly toDispose = new DisposableCollection();
 
     constructor(rpc: RPCProtocol, container: interfaces.Container) {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.WORKSPACE_EXT);
@@ -63,26 +66,30 @@ export class WorkspaceMainImpl implements WorkspaceMain {
         this.resourceResolver = container.get(TextContentResourceResolver);
         this.pluginServer = container.get(PluginServer);
         this.workspaceService = container.get(WorkspaceService);
-        this.storagePathService = container.get(StoragePathService);
-
-        this.inPluginFileSystemWatcherManager = new InPluginFileSystemWatcherManager(this.proxy, container);
+        this.fsPreferences = container.get(FileSystemPreferences);
+        this.inPluginFileSystemWatcherManager = container.get(InPluginFileSystemWatcherManager);
 
         this.processWorkspaceFoldersChanged(this.workspaceService.tryGetRoots());
-        this.workspaceService.onWorkspaceChanged(roots => {
+        this.toDispose.push(this.workspaceService.onWorkspaceChanged(roots => {
             this.processWorkspaceFoldersChanged(roots);
-        });
+        }));
     }
 
-    async processWorkspaceFoldersChanged(roots: FileStat[]): Promise<void> {
+    dispose(): void {
+        this.toDispose.dispose();
+    }
+
+    protected async processWorkspaceFoldersChanged(roots: FileStat[]): Promise<void> {
         if (this.isAnyRootChanged(roots) === false) {
             return;
         }
         this.roots = roots;
         this.proxy.$onWorkspaceFoldersChanged({ roots });
 
-        await this.storagePathService.updateStoragePath(roots);
-
-        const keyValueStorageWorkspacesData = await this.pluginServer.keyValueStorageGetAll(false);
+        const keyValueStorageWorkspacesData = await this.pluginServer.getAllStorageValues({
+            workspace: this.workspaceService.workspace,
+            roots: this.workspaceService.tryGetRoots()
+        });
         this.storageProxy.$updatePluginsWorkspaceData(keyValueStorageWorkspacesData);
 
     }
@@ -143,7 +150,7 @@ export class WorkspaceMainImpl implements WorkspaceMain {
                 placeholder: options.placeHolder,
                 onClose: () => {
                     if (activeElement) {
-                        activeElement.focus();
+                        activeElement.focus({ preventScroll: true });
                     }
 
                     resolve(returnValue);
@@ -154,16 +161,31 @@ export class WorkspaceMainImpl implements WorkspaceMain {
 
     async $startFileSearch(includePattern: string, includeFolderUri: string | undefined, excludePatternOrDisregardExcludes?: string | false,
         maxResults?: number): Promise<UriComponents[]> {
+        const roots: FileSearchService.RootOptions = {};
         const rootUris = includeFolderUri ? [includeFolderUri] : this.roots.map(r => r.uri);
-        const opts: FileSearchService.Options = { rootUris };
+        for (const rootUri of rootUris) {
+            roots[rootUri] = {};
+        }
+        const opts: FileSearchService.Options = { rootOptions: roots };
         if (includePattern) {
             opts.includePatterns = [includePattern];
         }
         if (typeof excludePatternOrDisregardExcludes === 'string') {
-            if (excludePatternOrDisregardExcludes === '') { // default excludes
-                opts.defaultIgnorePatterns = [];
-            } else {
-                opts.defaultIgnorePatterns = [excludePatternOrDisregardExcludes];
+            opts.excludePatterns = [excludePatternOrDisregardExcludes];
+        }
+        if (excludePatternOrDisregardExcludes !== false) {
+            for (const rootUri of rootUris) {
+                const filesExclude = this.fsPreferences.get('files.exclude', undefined, rootUri);
+                if (filesExclude) {
+                    for (const excludePattern in filesExclude) {
+                        if (filesExclude[excludePattern]) {
+                            const rootOptions = roots[rootUri];
+                            const rootExcludePatterns = rootOptions.excludePatterns || [];
+                            rootExcludePatterns.push(excludePattern);
+                            rootOptions.excludePatterns = rootExcludePatterns;
+                        }
+                    }
+                }
             }
         }
         if (typeof maxResults === 'number') {
@@ -173,8 +195,10 @@ export class WorkspaceMainImpl implements WorkspaceMain {
         return uriStrs.map(uriStr => Uri.parse(uriStr));
     }
 
-    $registerFileSystemWatcher(options: FileWatcherSubscriberOptions): Promise<string> {
-        return Promise.resolve(this.inPluginFileSystemWatcherManager.registerFileWatchSubscription(options));
+    async $registerFileSystemWatcher(options: FileWatcherSubscriberOptions): Promise<string> {
+        const handle = this.inPluginFileSystemWatcherManager.registerFileWatchSubscription(options, this.proxy);
+        this.toDispose.push(Disposable.create(() => this.inPluginFileSystemWatcherManager.unregisterFileWatchSubscription(handle)));
+        return handle;
     }
 
     $unregisterFileSystemWatcher(watcherId: string): Promise<void> {
@@ -183,7 +207,8 @@ export class WorkspaceMainImpl implements WorkspaceMain {
     }
 
     async $registerTextDocumentContentProvider(scheme: string): Promise<void> {
-        return this.resourceResolver.registerContentProvider(scheme, this.proxy);
+        this.resourceResolver.registerContentProvider(scheme, this.proxy);
+        this.toDispose.push(Disposable.create(() => this.resourceResolver.unregisterContentProvider(scheme)));
     }
 
     $unregisterTextDocumentContentProvider(scheme: string): void {
@@ -230,7 +255,7 @@ export class TextContentResourceResolver implements ResourceResolver {
         throw new Error(`Unable to find Text Content Resource Provider for scheme '${uri.scheme}'`);
     }
 
-    async registerContentProvider(scheme: string, proxy: WorkspaceExt): Promise<void> {
+    registerContentProvider(scheme: string, proxy: WorkspaceExt): void {
         if (this.providers.has(scheme)) {
             throw new Error(`Text Content Resource Provider for scheme '${scheme}' is already registered`);
         }
@@ -244,7 +269,7 @@ export class TextContentResourceResolver implements ResourceResolver {
                 }
 
                 resource = new TextContentResource(uri, proxy, {
-                    dispose() {
+                    dispose(): void {
                         instance.resources.delete(uri.toString());
                     }
                 });
@@ -272,8 +297,8 @@ export class TextContentResourceResolver implements ResourceResolver {
 
 export class TextContentResource implements Resource {
 
-    private onDidChangeContentsEmmiter: Emitter<void> = new Emitter<void>();
-    readonly onDidChangeContents: Event<void> = this.onDidChangeContentsEmmiter.event;
+    private onDidChangeContentsEmitter: Emitter<void> = new Emitter<void>();
+    readonly onDidChangeContents: Event<void> = this.onDidChangeContentsEmitter.event;
 
     // cached content
     cache: string | undefined;
@@ -296,13 +321,13 @@ export class TextContentResource implements Resource {
         return Promise.reject(new Error(`Unable to get content for '${this.uri.toString()}'`));
     }
 
-    dispose() {
+    dispose(): void {
         this.disposable.dispose();
     }
 
-    setContent(content: string) {
+    setContent(content: string): void {
         this.cache = content;
-        this.onDidChangeContentsEmmiter.fire(undefined);
+        this.onDidChangeContentsEmitter.fire(undefined);
     }
 
 }

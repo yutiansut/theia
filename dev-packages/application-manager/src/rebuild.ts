@@ -16,12 +16,11 @@
 
 import fs = require('fs-extra');
 import path = require('path');
-import cp = require('child_process');
 
-export function rebuild(target: 'electron' | 'browser', modules: string[]) {
+export function rebuild(target: 'electron' | 'browser', modules: string[]): void {
     const nodeModulesPath = path.join(process.cwd(), 'node_modules');
     const browserModulesPath = path.join(process.cwd(), '.browser_modules');
-    const modulesToProcess = modules || ['@theia/node-pty', 'nsfw', 'find-git-repositories'];
+    const modulesToProcess = modules || ['@theia/node-pty', 'nsfw', 'native-keymap', 'find-git-repositories'];
 
     if (target === 'electron' && !fs.existsSync(browserModulesPath)) {
         const dependencies: {
@@ -43,12 +42,8 @@ export function rebuild(target: 'electron' | 'browser', modules: string[]) {
         try {
             pack.dependencies = Object.assign({}, pack.dependencies, dependencies);
             fs.writeFileSync(packFile, JSON.stringify(pack, undefined, '  '));
-            const electronRebuildPath = path.join(process.cwd(), 'node_modules', '.bin', 'electron-rebuild');
-            if (process.platform === 'win32') {
-                cp.spawnSync('cmd', ['/c', electronRebuildPath]);
-            } else {
-                require(electronRebuildPath);
-            }
+            const electronRebuildPackageJson = require('electron-rebuild/package.json');
+            require(`electron-rebuild/${electronRebuildPackageJson['bin']['electron-rebuild']}`);
         } finally {
             setTimeout(() => {
                 fs.writeFile(packFile, packageText);

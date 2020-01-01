@@ -17,21 +17,21 @@
 import * as PDFObject from 'pdfobject';
 import { inject, injectable, postConstruct } from 'inversify';
 import { Message } from '@phosphor/messaging';
-import { PanelLayout, SplitPanel } from '@phosphor/widgets';
 import URI from '@theia/core/lib/common/uri';
 import { ILogger } from '@theia/core/lib/common/logger';
-import { Key, KeyCode } from '@theia/core/lib/browser/keys';
-import { Emitter, Event } from '@theia/core/lib/common/event';
+import { Emitter } from '@theia/core/lib/common/event';
 import { FileSystem } from '@theia/filesystem/lib/common/filesystem';
 import { KeybindingRegistry } from '@theia/core/lib/browser/keybinding';
 import { WindowService } from '@theia/core/lib/browser/window/window-service';
-import { FrontendApplicationContribution, ApplicationShell, parseCssTime } from '@theia/core/lib/browser';
+import { parseCssTime, Key, KeyCode } from '@theia/core/lib/browser';
 import { FileSystemWatcher, FileChangeEvent } from '@theia/filesystem/lib/browser/filesystem-watcher';
 import { DisposableCollection, Disposable } from '@theia/core/lib/common/disposable';
-import { BaseWidget, addEventListener, FocusTracker, Widget } from '@theia/core/lib/browser/widgets/widget';
+import { BaseWidget, addEventListener } from '@theia/core/lib/browser/widgets/widget';
 import { LocationMapperService } from './location-mapper-service';
+import { ApplicationShellMouseTracker } from '@theia/core/lib/browser/shell/application-shell-mouse-tracker';
 
 import debounce = require('lodash.debounce');
+import { MiniBrowserContentStyle } from './mini-browser-content-style';
 
 /**
  * Initializer properties for the embedded browser widget.
@@ -156,87 +156,6 @@ export namespace MiniBrowserProps {
 
 }
 
-/**
- * Contribution that tracks `mouseup` and `mousedown` events.
- *
- * This is required to be able to track the `TabBar`, `DockPanel`, and `SidePanel` resizing and drag and drop events correctly
- * all over the application. By default, when the mouse is over an `iframe` we lose the mouse tracking ability, so whenever
- * we click (`mousedown`), we overlay a transparent `div` over the `iframe` in the Mini Browser, then we set the `display` of
- * the transparent `div` to `none` on `mouseup` events.
- */
-@injectable()
-export class MiniBrowserMouseClickTracker implements FrontendApplicationContribution {
-
-    @inject(ApplicationShell)
-    protected readonly applicationShell: ApplicationShell;
-
-    protected readonly toDispose = new DisposableCollection();
-    protected readonly toDisposeOnActiveChange = new DisposableCollection();
-
-    protected readonly mouseupEmitter = new Emitter<MouseEvent>();
-    protected readonly mousedownEmitter = new Emitter<MouseEvent>();
-    protected readonly mouseupListener: (e: MouseEvent) => void = e => this.mouseupEmitter.fire(e);
-    protected readonly mousedownListener: (e: MouseEvent) => void = e => this.mousedownEmitter.fire(e);
-
-    onStart(): void {
-        // Here we need to attach a `mousedown` listener to the `TabBar`s, `DockPanel`s and the `SidePanel`s. Otherwise, Phosphor handles the event and stops the propagation.
-        // Track the `mousedown` on the `TabBar` for the currently active widget.
-        this.applicationShell.activeChanged.connect((shell: ApplicationShell, args: FocusTracker.IChangedArgs<Widget>) => {
-            this.toDisposeOnActiveChange.dispose();
-            if (args.newValue) {
-                const tabBar = shell.getTabBarFor(args.newValue);
-                if (tabBar) {
-                    this.toDisposeOnActiveChange.push(addEventListener(tabBar.node, 'mousedown', this.mousedownListener, true));
-                }
-            }
-        });
-
-        // Track the `mousedown` events for the `SplitPanel`s, if any.
-        const { layout } = this.applicationShell;
-        if (layout instanceof PanelLayout) {
-            this.toDispose.pushAll(
-                layout.widgets.filter(MiniBrowserMouseClickTracker.isSplitPanel).map(splitPanel => addEventListener(splitPanel.node, 'mousedown', this.mousedownListener, true))
-            );
-        }
-        // Track the `mousedown` on each `DockPanel`.
-        const { mainPanel, bottomPanel, leftPanelHandler, rightPanelHandler } = this.applicationShell;
-        this.toDispose.pushAll([mainPanel, bottomPanel, leftPanelHandler.dockPanel, rightPanelHandler.dockPanel]
-            .map(panel => addEventListener(panel.node, 'mousedown', this.mousedownListener, true)));
-
-        // The `mouseup` event has to be tracked on the `document`. Phosphor attaches to there.
-        document.addEventListener('mouseup', this.mouseupListener, true);
-
-        // Make sure it is disposed in the end.
-        this.toDispose.pushAll([
-            this.mousedownEmitter,
-            this.mouseupEmitter,
-            Disposable.create(() => document.removeEventListener('mouseup', this.mouseupListener, true))
-        ]);
-    }
-
-    onStop(): void {
-        this.toDispose.dispose();
-        this.toDisposeOnActiveChange.dispose();
-    }
-
-    get onMouseup(): Event<MouseEvent> {
-        return this.mouseupEmitter.event;
-    }
-
-    get onMousedown(): Event<MouseEvent> {
-        return this.mousedownEmitter.event;
-    }
-
-}
-
-export namespace MiniBrowserMouseClickTracker {
-
-    export function isSplitPanel(arg: Widget): arg is SplitPanel {
-        return arg instanceof SplitPanel;
-    }
-
-}
-
 export const MiniBrowserContentFactory = Symbol('MiniBrowserContentFactory');
 export type MiniBrowserContentFactory = (props: MiniBrowserProps) => MiniBrowserContent;
 
@@ -255,8 +174,8 @@ export class MiniBrowserContent extends BaseWidget {
     @inject(KeybindingRegistry)
     protected readonly keybindings: KeybindingRegistry;
 
-    @inject(MiniBrowserMouseClickTracker)
-    protected readonly mouseTracker: MiniBrowserMouseClickTracker;
+    @inject(ApplicationShellMouseTracker)
+    protected readonly mouseTracker: ApplicationShellMouseTracker;
 
     @inject(FileSystem)
     protected readonly fileSystem: FileSystem;
@@ -287,7 +206,7 @@ export class MiniBrowserContent extends BaseWidget {
     constructor(@inject(MiniBrowserProps) protected readonly props: MiniBrowserProps) {
         super();
         this.node.tabIndex = 0;
-        this.addClass(MiniBrowserContent.Styles.MINI_BROWSER);
+        this.addClass(MiniBrowserContentStyle.MINI_BROWSER);
         this.input = this.createToolbar(this.node).input;
         const contentArea = this.createContentArea(this.node);
         this.frame = contentArea.frame;
@@ -353,7 +272,7 @@ export class MiniBrowserContent extends BaseWidget {
 
     protected createToolbar(parent: HTMLElement): HTMLDivElement & Readonly<{ input: HTMLInputElement }> {
         const toolbar = document.createElement('div');
-        toolbar.classList.add(this.getToolbarProps() === 'read-only' ? MiniBrowserContent.Styles.TOOLBAR_READ_ONLY : MiniBrowserContent.Styles.TOOLBAR);
+        toolbar.classList.add(this.getToolbarProps() === 'read-only' ? MiniBrowserContentStyle.TOOLBAR_READ_ONLY : MiniBrowserContentStyle.TOOLBAR);
         parent.appendChild(toolbar);
         this.createPrevious(toolbar);
         this.createNext(toolbar);
@@ -374,10 +293,10 @@ export class MiniBrowserContent extends BaseWidget {
     // tslint:disable-next-line:max-line-length
     protected createContentArea(parent: HTMLElement): HTMLElement & Readonly<{ frame: HTMLIFrameElement, loadIndicator: HTMLElement, errorBar: HTMLElement & Readonly<{ message: HTMLElement }>, pdfContainer: HTMLElement, transparentOverlay: HTMLElement }> {
         const contentArea = document.createElement('div');
-        contentArea.classList.add(MiniBrowserContent.Styles.CONTENT_AREA);
+        contentArea.classList.add(MiniBrowserContentStyle.CONTENT_AREA);
 
         const loadIndicator = document.createElement('div');
-        loadIndicator.classList.add(MiniBrowserContent.Styles.PRE_LOAD);
+        loadIndicator.classList.add(MiniBrowserContentStyle.PRE_LOAD);
         loadIndicator.style.display = 'none';
 
         const errorBar = this.createErrorBar();
@@ -392,11 +311,11 @@ export class MiniBrowserContent extends BaseWidget {
         this.openEmitter.event(this.handleOpen.bind(this));
 
         const transparentOverlay = document.createElement('div');
-        transparentOverlay.classList.add(MiniBrowserContent.Styles.TRANSPARENT_OVERLAY);
+        transparentOverlay.classList.add(MiniBrowserContentStyle.TRANSPARENT_OVERLAY);
         transparentOverlay.style.display = 'none';
 
         const pdfContainer = document.createElement('div');
-        pdfContainer.classList.add(MiniBrowserContent.Styles.PDF_CONTAINER);
+        pdfContainer.classList.add(MiniBrowserContentStyle.PDF_CONTAINER);
         pdfContainer.id = `${this.id}-pdf-container`;
         pdfContainer.style.display = 'none';
 
@@ -421,7 +340,7 @@ export class MiniBrowserContent extends BaseWidget {
 
     protected createErrorBar(): HTMLElement & Readonly<{ message: HTMLElement }> {
         const errorBar = document.createElement('div');
-        errorBar.classList.add(MiniBrowserContent.Styles.ERROR_BAR);
+        errorBar.classList.add(MiniBrowserContentStyle.ERROR_BAR);
         errorBar.style.display = 'none';
 
         const icon = document.createElement('span');
@@ -452,25 +371,25 @@ export class MiniBrowserContent extends BaseWidget {
         clearTimeout(this.frameLoadTimeout);
         this.maybeResetBackground();
         this.hideLoadIndicator();
-        this.showErrorBar('Loading this page is taking longer than usual');
+        this.showErrorBar('Still loading...');
     }
 
     protected showLoadIndicator(): void {
-        this.loadIndicator.classList.remove(MiniBrowserContent.Styles.FADE_OUT);
+        this.loadIndicator.classList.remove(MiniBrowserContentStyle.FADE_OUT);
         this.loadIndicator.style.display = 'block';
     }
 
     protected hideLoadIndicator(): void {
         // Start the fade-out transition.
-        this.loadIndicator.classList.add(MiniBrowserContent.Styles.FADE_OUT);
+        this.loadIndicator.classList.add(MiniBrowserContentStyle.FADE_OUT);
         // Actually hide the load indicator after the transition is finished.
         const preloadStyle = window.getComputedStyle(this.loadIndicator);
         const transitionDuration = parseCssTime(preloadStyle.transitionDuration, 0);
         setTimeout(() => {
             // But don't hide it if it was shown again since the transition started.
-            if (this.loadIndicator.classList.contains(MiniBrowserContent.Styles.FADE_OUT)) {
+            if (this.loadIndicator.classList.contains(MiniBrowserContentStyle.FADE_OUT)) {
                 this.loadIndicator.style.display = 'none';
-                this.loadIndicator.classList.remove(MiniBrowserContent.Styles.FADE_OUT);
+                this.loadIndicator.classList.remove(MiniBrowserContentStyle.FADE_OUT);
             }
         }, transitionDuration);
     }
@@ -535,6 +454,7 @@ export class MiniBrowserContent extends BaseWidget {
     protected createInput(parent: HTMLElement): HTMLInputElement {
         const input = document.createElement('input');
         input.type = 'text';
+        input.classList.add('theia-input');
         this.toDispose.pushAll([
             addEventListener(input, 'keydown', this.handleInputChange.bind(this)),
             addEventListener(input, 'click', () => {
@@ -562,26 +482,26 @@ export class MiniBrowserContent extends BaseWidget {
     }
 
     protected createPrevious(parent: HTMLElement): HTMLElement {
-        return this.onClick(this.createButton(parent, 'Show The Previous Page', MiniBrowserContent.Styles.PREVIOUS), this.navigateBackEmitter);
+        return this.onClick(this.createButton(parent, 'Show The Previous Page', MiniBrowserContentStyle.PREVIOUS), this.navigateBackEmitter);
     }
 
     protected createNext(parent: HTMLElement): HTMLElement {
-        return this.onClick(this.createButton(parent, 'Show The Next Page', MiniBrowserContent.Styles.NEXT), this.navigateForwardEmitter);
+        return this.onClick(this.createButton(parent, 'Show The Next Page', MiniBrowserContentStyle.NEXT), this.navigateForwardEmitter);
     }
 
     protected createRefresh(parent: HTMLElement): HTMLElement {
-        return this.onClick(this.createButton(parent, 'Reload This Page', MiniBrowserContent.Styles.REFRESH), this.refreshEmitter);
+        return this.onClick(this.createButton(parent, 'Reload This Page', MiniBrowserContentStyle.REFRESH), this.refreshEmitter);
     }
 
     protected createOpen(parent: HTMLElement): HTMLElement {
-        const button = this.onClick(this.createButton(parent, 'Open In A New Window', MiniBrowserContent.Styles.OPEN), this.openEmitter);
+        const button = this.onClick(this.createButton(parent, 'Open In A New Window', MiniBrowserContentStyle.OPEN), this.openEmitter);
         return button;
     }
 
     protected createButton(parent: HTMLElement, title: string, ...className: string[]): HTMLElement {
         const button = document.createElement('div');
         button.title = title;
-        button.classList.add(...className, MiniBrowserContent.Styles.BUTTON);
+        button.classList.add(...className, MiniBrowserContentStyle.BUTTON);
         parent.appendChild(button);
         return button;
     }
@@ -589,7 +509,7 @@ export class MiniBrowserContent extends BaseWidget {
     // tslint:disable-next-line:no-any
     protected onClick(element: HTMLElement, emitter: Emitter<any>): HTMLElement {
         this.toDispose.push(addEventListener(element, 'click', () => {
-            if (!element.classList.contains(MiniBrowserContent.Styles.DISABLED)) {
+            if (!element.classList.contains(MiniBrowserContentStyle.DISABLED)) {
                 emitter.fire(undefined);
             }
         }));
@@ -606,7 +526,7 @@ export class MiniBrowserContent extends BaseWidget {
         }
     }
 
-    protected frameSrc() {
+    protected frameSrc(): string {
         let src = this.frame.src;
         try {
             const { contentWindow } = this.frame;
@@ -658,7 +578,7 @@ export class MiniBrowserContent extends BaseWidget {
                     this.input.title = `Open ${url} In A New Window`;
                 }
                 clearTimeout(this.frameLoadTimeout);
-                this.frameLoadTimeout = window.setTimeout(this.onFrameTimeout.bind(this), 3000);
+                this.frameLoadTimeout = window.setTimeout(this.onFrameTimeout.bind(this), 4000);
                 if (showLoadIndicator) {
                     this.showLoadIndicator();
                 }
@@ -708,30 +628,6 @@ export class MiniBrowserContent extends BaseWidget {
                 console.log(e);
             }
         }
-    }
-
-}
-
-export namespace MiniBrowserContent {
-
-    export namespace Styles {
-
-        export const MINI_BROWSER = 'theia-mini-browser';
-        export const TOOLBAR = 'theia-mini-browser-toolbar';
-        export const TOOLBAR_READ_ONLY = 'theia-mini-browser-toolbar-read-only';
-        export const PRE_LOAD = 'theia-mini-browser-load-indicator';
-        export const FADE_OUT = 'theia-fade-out';
-        export const CONTENT_AREA = 'theia-mini-browser-content-area';
-        export const PDF_CONTAINER = 'theia-mini-browser-pdf-container';
-        export const PREVIOUS = 'theia-mini-browser-previous';
-        export const NEXT = 'theia-mini-browser-next';
-        export const REFRESH = 'theia-mini-browser-refresh';
-        export const OPEN = 'theia-mini-browser-open';
-        export const BUTTON = 'theia-mini-browser-button';
-        export const DISABLED = 'theia-mini-browser-button-disabled';
-        export const TRANSPARENT_OVERLAY = 'theia-mini-browser-transparent-overlay';
-        export const ERROR_BAR = 'theia-mini-browser-error-bar';
-
     }
 
 }

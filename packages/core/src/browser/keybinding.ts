@@ -15,16 +15,21 @@
  ********************************************************************************/
 
 import { injectable, inject, named } from 'inversify';
+import { isOSX } from '../common/os';
+import { Emitter, Event } from '../common/event';
 import { CommandRegistry } from '../common/command';
-import { KeyCode, KeySequence } from './keys';
+import { Disposable, DisposableCollection } from '../common/disposable';
+import { KeyCode, KeySequence, Key } from './keyboard/keys';
+import { KeyboardLayoutService } from './keyboard/keyboard-layout-service';
 import { ContributionProvider } from '../common/contribution-provider';
 import { ILogger } from '../common/logger';
 import { StatusBarAlignment, StatusBar } from './status-bar/status-bar';
-import { isOSX } from '../common/os';
 import { ContextKeyService } from './context-key-service';
+import * as common from '../common/keybinding';
 
 export enum KeybindingScope {
     DEFAULT,
+    DEFAULT_OVERRIDING,
     USER,
     WORKSPACE,
     END
@@ -51,12 +56,6 @@ export namespace Keybinding {
         return JSON.stringify(copy);
     }
 
-    /* Return a user visible representation of a keybinding.  */
-    export function acceleratorFor(keybinding: Keybinding, separator: string = ' ') {
-        const keyCodesString = keybinding.keybinding.split(' ');
-        return KeySequence.acceleratorFor(keyCodesString.map(k => KeyCode.parse(k)), separator);
-    }
-
     /* Determine whether object is a KeyBinding */
     // tslint:disable-next-line:no-any
     export function is(arg: Keybinding | any): arg is Keybinding {
@@ -64,21 +63,19 @@ export namespace Keybinding {
     }
 }
 
-export interface Keybinding {
-    /* Command identifier, this needs to be a unique string.  */
-    command: string;
-    /* Keybinding string as defined in packages/keymaps/README.md.  */
-    keybinding: string;
+/**
+ * @deprecated import from `@theia/core/lib/common/keybinding` instead
+ */
+export type Keybinding = common.Keybinding;
+
+export interface ResolvedKeybinding extends Keybinding {
     /**
-     * The optional keybinding context where this binding belongs to.
-     * If not specified, then this keybinding context belongs to the NOOP
-     * keybinding context.
+     * The KeyboardLayoutService may transform the `keybinding` depending on the
+     * user's keyboard layout. This property holds the transformed keybinding that
+     * should be used in the UI. The value is undefined if the KeyboardLayoutService
+     * has not been called yet to resolve the keybinding.
      */
-    context?: string;
-    /**
-     * https://code.visualstudio.com/docs/getstarted/keybindings#_when-clause-contexts
-     */
-    when?: string;
+    resolved?: KeyCode[];
 }
 
 export interface ScopedKeybinding extends Keybinding {
@@ -87,7 +84,14 @@ export interface ScopedKeybinding extends Keybinding {
 }
 
 export const KeybindingContribution = Symbol('KeybindingContribution');
+/**
+ * Representation of a keybinding contribution.
+ */
 export interface KeybindingContribution {
+    /**
+     * Registers keybindings.
+     * @param keybindings the keybinding registry.
+     */
     registerKeybindings(keybindings: KeybindingRegistry): void;
 }
 
@@ -122,6 +126,9 @@ export class KeybindingRegistry {
     protected readonly contexts: { [id: string]: KeybindingContext } = {};
     protected readonly keymaps: Keybinding[][] = [...Array(KeybindingScope.length)].map(() => []);
 
+    @inject(KeyboardLayoutService)
+    protected readonly keyboardLayoutService: KeyboardLayoutService;
+
     @inject(ContributionProvider) @named(KeybindingContext)
     protected readonly contextProvider: ContributionProvider<KeybindingContext>;
 
@@ -140,7 +147,12 @@ export class KeybindingRegistry {
     @inject(ContextKeyService)
     protected readonly whenContextService: ContextKeyService;
 
-    onStart(): void {
+    async onStart(): Promise<void> {
+        await this.keyboardLayoutService.initialize();
+        this.keyboardLayoutService.onKeyboardLayoutChanged(newLayout => {
+            this.clearResolvedKeybindings();
+            this.keybindingsChanged.fire(undefined);
+        });
         this.registerContext(KeybindingContexts.NOOP_CONTEXT);
         this.registerContext(KeybindingContexts.DEFAULT_CONTEXT);
         this.registerContext(...this.contextProvider.getContributions());
@@ -149,13 +161,23 @@ export class KeybindingRegistry {
         }
     }
 
+    protected keybindingsChanged = new Emitter<void>();
+
+    /**
+     * Event that is fired when the resolved keybindings change due to a different keyboard layout
+     * or when a new keymap is being set
+     */
+    get onKeybindingsChanged(): Event<void> {
+        return this.keybindingsChanged.event;
+    }
+
     /**
      * Registers the keybinding context arguments into the application. Fails when an already registered
      * context is being registered.
      *
      * @param contexts the keybinding contexts to register into the application.
      */
-    protected registerContext(...contexts: KeybindingContext[]) {
+    protected registerContext(...contexts: KeybindingContext[]): void {
         for (const context of contexts) {
             const { id } = context;
             if (this.contexts[id]) {
@@ -170,9 +192,10 @@ export class KeybindingRegistry {
      * Register a default keybinding to the registry.
      *
      * @param binding
+     * @param override Override existed keybinding
      */
-    registerKeybinding(binding: Keybinding) {
-        this.doRegisterKeybinding(binding, KeybindingScope.DEFAULT);
+    registerKeybinding(binding: Keybinding, override?: boolean): Disposable {
+        return this.doRegisterKeybinding(binding, !!override ? KeybindingScope.DEFAULT_OVERRIDING : undefined);
     }
 
     /**
@@ -180,8 +203,8 @@ export class KeybindingRegistry {
      *
      * @param bindings
      */
-    registerKeybindings(...bindings: Keybinding[]): void {
-        this.doRegisterKeybindings(bindings, KeybindingScope.DEFAULT);
+    registerKeybindings(...bindings: Keybinding[]): Disposable {
+        return this.doRegisterKeybindings(bindings, KeybindingScope.DEFAULT);
     }
 
     /**
@@ -209,20 +232,55 @@ export class KeybindingRegistry {
         });
     }
 
-    protected doRegisterKeybindings(bindings: Keybinding[], scope: KeybindingScope = KeybindingScope.DEFAULT) {
+    protected doRegisterKeybindings(bindings: Keybinding[], scope: KeybindingScope = KeybindingScope.DEFAULT): Disposable {
+        const toDispose = new DisposableCollection();
         for (const binding of bindings) {
-            this.doRegisterKeybinding(binding, scope);
+            toDispose.push(this.doRegisterKeybinding(binding, scope));
         }
+        return toDispose;
     }
 
-    protected doRegisterKeybinding(binding: Keybinding, scope: KeybindingScope = KeybindingScope.DEFAULT) {
+    protected doRegisterKeybinding(binding: Keybinding, scope: KeybindingScope = KeybindingScope.DEFAULT): Disposable {
         try {
-            if (this.containsKeybinding(this.keymaps[scope], binding)) {
+            this.resolveKeybinding(binding);
+            if (this.containsKeybinding(this.keymaps[scope], binding) && scope !== KeybindingScope.DEFAULT_OVERRIDING) {
                 throw new Error(`"${binding.keybinding}" is in collision with something else [scope:${scope}]`);
             }
             this.keymaps[scope].push(binding);
+            return Disposable.create(() => {
+                const index = this.keymaps[scope].indexOf(binding);
+                if (index !== -1) {
+                    this.keymaps[scope].splice(index, 1);
+                }
+            });
         } catch (error) {
             this.logger.warn(`Could not register keybinding:\n  ${Keybinding.stringify(binding)}\n${error}`);
+            return Disposable.NULL;
+        }
+    }
+
+    /**
+     * Ensure that the `resolved` property of the given binding is set by calling the KeyboardLayoutService.
+     */
+    resolveKeybinding(binding: ResolvedKeybinding): KeyCode[] {
+        if (!binding.resolved) {
+            const sequence = KeySequence.parse(binding.keybinding);
+            binding.resolved = sequence.map(code => this.keyboardLayoutService.resolveKeyCode(code));
+        }
+        return binding.resolved;
+    }
+
+    /**
+     * Clear all `resolved` properties of registered keybindings so the KeyboardLayoutService is called
+     * again to resolve them. This is necessary when the user's keyboard layout has changed.
+     */
+    protected clearResolvedKeybindings(): void {
+        for (let i = KeybindingScope.DEFAULT; i < KeybindingScope.END; i++) {
+            const bindings = this.keymaps[i];
+            for (let j = 0; j < bindings.length; j++) {
+                const binding = bindings[j] as ResolvedKeybinding;
+                binding.resolved = undefined;
+            }
         }
     }
 
@@ -233,9 +291,9 @@ export class KeybindingRegistry {
      * @param binding the keybinding to test collisions for
      */
     containsKeybinding(bindings: Keybinding[], binding: Keybinding): boolean {
-        const collisions = this.getKeySequenceCollisions(bindings, KeySequence.parse(
-            this.getCurrentPlatformKeybinding(binding.keybinding))
-        ).filter(b => b.context === binding.context);
+        const bindingKeySequence = this.resolveKeybinding(binding);
+        const collisions = this.getKeySequenceCollisions(bindings, bindingKeySequence)
+            .filter(b => b.context === binding.context && !b.when && !binding.when);
 
         if (collisions.full.length > 0) {
             this.logger.warn('Collided keybinding is ignored; ',
@@ -263,13 +321,70 @@ export class KeybindingRegistry {
     }
 
     /**
-     * Converts special `ctrlcmd` modifier back to `ctrl` for non-OSX users in a keybinding string.
-     * (`ctrlcmd` is mapped to the same actual key as `ctrl` under non-OSX users)
-     *
-     * @param keybinding The keybinding string to convert.
+     * Return a user visible representation of a keybinding.
      */
-    protected getCurrentPlatformKeybinding(keybinding: string): string {
-        return isOSX ? keybinding : keybinding.replace(/\bctrlcmd\b/, 'ctrl');
+    acceleratorFor(keybinding: Keybinding, separator: string = ' '): string[] {
+        const bindingKeySequence = this.resolveKeybinding(keybinding);
+        return this.acceleratorForSequence(bindingKeySequence, separator);
+    }
+
+    /**
+     * Return a user visible representation of a key sequence.
+     */
+    acceleratorForSequence(keySequence: KeySequence, separator: string = ' '): string[] {
+        return keySequence.map(keyCode => this.acceleratorForKeyCode(keyCode, separator));
+    }
+
+    /**
+     * Return a user visible representation of a key code (a key with modifiers).
+     */
+    acceleratorForKeyCode(keyCode: KeyCode, separator: string = ' '): string {
+        const keyCodeResult = [];
+        if (keyCode.meta && isOSX) {
+            keyCodeResult.push('Cmd');
+        }
+        if (keyCode.ctrl) {
+            keyCodeResult.push('Ctrl');
+        }
+        if (keyCode.alt) {
+            keyCodeResult.push('Alt');
+        }
+        if (keyCode.shift) {
+            keyCodeResult.push('Shift');
+        }
+        if (keyCode.key) {
+            keyCodeResult.push(this.acceleratorForKey(keyCode.key));
+        }
+        return keyCodeResult.join(separator);
+    }
+
+    /**
+     * Return a user visible representation of a single key.
+     */
+    acceleratorForKey(key: Key): string {
+        if (isOSX) {
+            if (key === Key.ARROW_LEFT) {
+                return '←';
+            }
+            if (key === Key.ARROW_RIGHT) {
+                return '→';
+            }
+            if (key === Key.ARROW_UP) {
+                return '↑';
+            }
+            if (key === Key.ARROW_DOWN) {
+                return '↓';
+            }
+        }
+        const keyString = this.keyboardLayoutService.getKeyboardCharacter(key);
+        if (key.keyCode >= Key.KEY_A.keyCode && key.keyCode <= Key.KEY_Z.keyCode ||
+            key.keyCode >= Key.F1.keyCode && key.keyCode <= Key.F24.keyCode) {
+            return keyString.toUpperCase();
+        } else if (keyString.length > 1) {
+            return keyString.charAt(0).toUpperCase() + keyString.slice(1);
+        } else {
+            return keyString;
+        }
     }
 
     /**
@@ -281,8 +396,8 @@ export class KeybindingRegistry {
     protected getKeybindingCollisions(bindings: Keybinding[], binding: Keybinding): KeybindingRegistry.KeybindingsResult {
         const result = new KeybindingRegistry.KeybindingsResult();
         try {
-            const keySequence = KeySequence.parse(this.getCurrentPlatformKeybinding(binding.keybinding));
-            result.merge(this.getKeySequenceCollisions(bindings, keySequence));
+            const bindingKeySequence = this.resolveKeybinding(binding);
+            result.merge(this.getKeySequenceCollisions(bindings, bindingKeySequence));
         } catch (error) {
             this.logger.warn(error);
         }
@@ -293,48 +408,28 @@ export class KeybindingRegistry {
      * Finds collisions for a key sequence inside a list of bindings (error-free)
      *
      * @param bindings the reference bindings
-     * @param keySequence the sequence to match
+     * @param candidate the sequence to match
      */
-    protected getKeySequenceCollisions(bindings: Keybinding[], keySequence: KeyCode[]): KeybindingRegistry.KeybindingsResult {
+    protected getKeySequenceCollisions(bindings: Keybinding[], candidate: KeySequence): KeybindingRegistry.KeybindingsResult {
         const result = new KeybindingRegistry.KeybindingsResult();
-
-        /**
-         * compare the given KeySequence with a particular binding
-         */
-        function compareBinding(candidate: KeyCode[], binding: Keybinding, isNormalized: boolean = false) {
-            const bindingKeySequence = KeySequence.parse(binding.keybinding);
-            const compareResult = KeySequence.compare(candidate, bindingKeySequence);
-            switch (compareResult) {
-                case KeySequence.CompareResult.FULL: {
-                    if (isNormalized) {
-                        result.normalized.push(binding);
-                    } else {
-                        result.full.push(binding);
-                    }
-                    break;
-                }
-                case KeySequence.CompareResult.PARTIAL: {
-                    result.partial.push(binding);
-                    break;
-                }
-                case KeySequence.CompareResult.SHADOW: {
-                    result.shadow.push(binding);
-                    break;
-                }
-                default: {
-                    // no match. Let's try with a US keborad normalized version if there is one.
-                    const normalizedUs = candidate.map(k => k.normalizeToUsLayout());
-                    if (normalizedUs.indexOf(undefined) === -1) {
-                        compareBinding(normalizedUs as KeyCode[], binding, true);
-                    }
-                    break;
-                }
-            }
-        }
-
-        for (const registeredBinding of bindings) {
+        for (const binding of bindings) {
             try {
-                compareBinding(keySequence, registeredBinding);
+                const bindingKeySequence = this.resolveKeybinding(binding);
+                const compareResult = KeySequence.compare(candidate, bindingKeySequence);
+                switch (compareResult) {
+                    case KeySequence.CompareResult.FULL: {
+                        result.full.push(binding);
+                        break;
+                    }
+                    case KeySequence.CompareResult.PARTIAL: {
+                        result.partial.push(binding);
+                        break;
+                    }
+                    case KeySequence.CompareResult.SHADOW: {
+                        result.shadow.push(binding);
+                        break;
+                    }
+                }
             } catch (error) {
                 this.logger.warn(error);
             }
@@ -356,15 +451,16 @@ export class KeybindingRegistry {
 
             matches.full = matches.full.filter(
                 binding => this.getKeybindingCollisions(result.full, binding).full.length === 0);
-            matches.normalized = matches.normalized.filter(
-                binding => this.getKeybindingCollisions(result.normalized, binding).normalized.length === 0);
             matches.partial = matches.partial.filter(
                 binding => this.getKeybindingCollisions(result.partial, binding).partial.length === 0);
 
+            if (scope === KeybindingScope.DEFAULT_OVERRIDING) {
+                matches.full.reverse();
+                matches.partial.reverse();
+            }
             result.merge(matches);
         }
         this.sortKeybindingsByPriority(result.full);
-        this.sortKeybindingsByPriority(result.normalized);
         this.sortKeybindingsByPriority(result.partial);
         return result;
     }
@@ -423,7 +519,7 @@ export class KeybindingRegistry {
      *
      * @param keybindings Array of keybindings to be sorted in-place.
      */
-    private sortKeybindingsByPriority(keybindings: Keybinding[]) {
+    private sortKeybindingsByPriority(keybindings: Keybinding[]): void {
         keybindings.sort((a: Keybinding, b: Keybinding): number => {
 
             let acontext: KeybindingContext | undefined;
@@ -466,7 +562,7 @@ export class KeybindingRegistry {
      * @param event keyboard event.
      * @return true if the corresponding command was executed false otherwise.
      */
-    protected tryKeybindingExecution(bindings: Keybinding[], event: KeyboardEvent) {
+    protected tryKeybindingExecution(bindings: Keybinding[], event: KeyboardEvent): boolean {
 
         if (bindings.length === 0) {
             return false;
@@ -480,10 +576,10 @@ export class KeybindingRegistry {
                 } else {
                     const command = this.commandRegistry.getCommand(binding.command);
                     if (command) {
-                        const commandHandler = this.commandRegistry.getActiveHandler(command.id);
+                        const commandHandler = this.commandRegistry.getActiveHandler(command.id, binding.args);
 
                         if (commandHandler) {
-                            commandHandler.execute();
+                            commandHandler.execute(binding.args);
                         }
 
                         /* Note that if a keybinding is in context but the command is
@@ -528,22 +624,23 @@ export class KeybindingRegistry {
             return;
         }
 
+        this.keyboardLayoutService.validateKeyCode(keyCode);
         this.keySequence.push(keyCode);
         const bindings = this.getKeybindingsForKeySequence(this.keySequence);
 
-        if (this.tryKeybindingExecution(bindings.full, event)) {
+        if (bindings.partial.length === 0 && this.tryKeybindingExecution(bindings.full, event)) {
 
             this.keySequence = [];
             this.statusBar.removeElement('keybinding-status');
 
-        } else if (bindings.partial.length > 0) {
+        } else if (bindings.partial.some(binding => this.isEnabled(binding, event))) {
 
             /* Accumulate the keysequence */
             event.preventDefault();
             event.stopPropagation();
 
             this.statusBar.setElement('keybinding-status', {
-                text: `(${KeySequence.acceleratorFor(this.keySequence, '+')}) was pressed, waiting for more keys`,
+                text: `(${this.acceleratorForSequence(this.keySequence, '+')}) was pressed, waiting for more keys`,
                 alignment: StatusBarAlignment.LEFT,
                 priority: 2
             });
@@ -567,15 +664,21 @@ export class KeybindingRegistry {
 
     setKeymap(scope: KeybindingScope, bindings: Keybinding[]): void {
         this.resetKeybindingsForScope(scope);
-        this.doRegisterKeybindings(bindings, scope);
+        this.toResetKeymap.set(scope, this.doRegisterKeybindings(bindings, scope));
+        this.keybindingsChanged.fire(undefined);
     }
+
+    protected readonly toResetKeymap = new Map<KeybindingScope, Disposable>();
 
     /**
      * Reset keybindings for a specific scope
      * @param scope scope to reset the keybindings for
      */
     resetKeybindingsForScope(scope: KeybindingScope): void {
-        this.keymaps[scope] = [];
+        const toReset = this.toResetKeymap.get(scope);
+        if (toReset) {
+            toReset.dispose();
+        }
     }
 
     /**
@@ -591,7 +694,6 @@ export class KeybindingRegistry {
 export namespace KeybindingRegistry {
     export class KeybindingsResult {
         full: Keybinding[] = [];
-        normalized: Keybinding[] = [];
         partial: Keybinding[] = [];
         shadow: Keybinding[] = [];
 
@@ -603,7 +705,6 @@ export namespace KeybindingRegistry {
          */
         merge(other: KeybindingsResult): KeybindingsResult {
             this.full.push(...other.full);
-            this.normalized.push(...other.normalized);
             this.partial.push(...other.partial);
             this.shadow.push(...other.shadow);
             return this;
@@ -618,7 +719,6 @@ export namespace KeybindingRegistry {
         filter(fn: (binding: Keybinding) => boolean): KeybindingsResult {
             const result = new KeybindingsResult();
             result.full = this.full.filter(fn);
-            result.normalized = this.normalized.filter(fn);
             result.partial = this.partial.filter(fn);
             result.shadow = this.shadow.filter(fn);
             return result;

@@ -19,6 +19,7 @@
 
 declare module monaco.instantiation {
     export interface IInstantiationService {
+        invokeFunction: (fn: any, ...args: any) => any
     }
 }
 
@@ -29,7 +30,7 @@ declare module monaco.editor {
     }
 
     export interface IBulkEditService {
-        apply(edit: monaco.languages.WorkspaceEdit): monaco.Promise<IBulkEditResult>;
+        apply(edit: monaco.languages.WorkspaceEdit): Promise<IBulkEditResult>;
     }
 
     export interface IDiffNavigator {
@@ -46,8 +47,10 @@ declare module monaco.editor {
     export interface IStandaloneCodeEditor extends CommonCodeEditor {
         setDecorations(decorationTypeKey: string, ranges: IDecorationOptions[]): void;
         setDecorationsFast(decorationTypeKey: string, ranges: IRange[]): void;
+        trigger(source: string, handlerId: string, payload: any): void
     }
 
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/editor/browser/widget/codeEditorWidget.ts#L107
     export interface CommonCodeEditor {
         readonly _commandService: monaco.commands.ICommandService;
         readonly _instantiationService: monaco.instantiation.IInstantiationService;
@@ -55,7 +58,9 @@ declare module monaco.editor {
             'editor.controller.quickOpenController': monaco.quickOpen.QuickOpenController
             'editor.contrib.referencesController': monaco.referenceSearch.ReferencesController
         }
-        readonly cursor: ICursor;
+        readonly _modelData: {
+            cursor: ICursor
+        };
     }
 
     export interface ICursor {
@@ -106,7 +111,7 @@ declare module monaco.editor {
 
     export interface ICodeEditorService {
         getActiveCodeEditor(): monaco.editor.ICodeEditor | undefined;
-        openCodeEditor(input: monaco.editor.IResourceInput, source?: monaco.editor.ICodeEditor, sideBySide?: boolean): monaco.Promise<monaco.editor.CommonCodeEditor | undefined>;
+        openCodeEditor(input: monaco.editor.IResourceInput, source?: monaco.editor.ICodeEditor, sideBySide?: boolean): Promise<monaco.editor.CommonCodeEditor | undefined>;
         registerDecorationType(key: string, options: IDecorationRenderOptions, parentTypeKey?: string): void;
         removeDecorationType(key: string): void;
         resolveDecorationOptions(typeKey: string, writable: boolean): IModelDecorationOptions;
@@ -121,7 +126,7 @@ declare module monaco.editor {
          * Provided a resource URI, it will return a model reference
          * which should be disposed once not needed anymore.
          */
-        createModelReference(resource: monaco.Uri): monaco.Promise<IReference<ITextEditorModel>>;
+        createModelReference(resource: monaco.Uri): Promise<IReference<ITextEditorModel>>;
 
         /**
          * Registers a specific `scheme` content provider.
@@ -133,7 +138,7 @@ declare module monaco.editor {
         /**
          * Given a resource, return the content of the resource as IModel.
          */
-        provideTextContent(resource: monaco.Uri): monaco.Promise<monaco.editor.IModel>;
+        provideTextContent(resource: monaco.Uri): Promise<monaco.editor.IModel>;
     }
 
     export interface ITextEditorModel {
@@ -141,7 +146,7 @@ declare module monaco.editor {
         /**
          * Loads the model.
          */
-        load(): monaco.Promise<ITextEditorModel>;
+        load(): Promise<ITextEditorModel>;
 
         /**
          * Dispose associated resources
@@ -162,7 +167,7 @@ declare module monaco.editor {
         /**
          * Returns the actions for the menu
          */
-        getActions(): monaco.Promise<IAction[]>
+        getActions(): ReadonlyArray<IAction>;
 
         /**
          * Needs to be called with the context menu closes again.
@@ -178,9 +183,10 @@ declare module monaco.editor {
         enabled: boolean;
         checked: boolean;
         radio: boolean;
-        run(event?: any): monaco.Promise<any>;
+        run(event?: any): Promise<any>;
     }
 
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/platform/contextview/browser/contextView.ts#L38
     export interface IContextMenuService {
         /**
          * Shows the native Monaco context menu in the editor.
@@ -204,9 +210,10 @@ declare module monaco.editor {
         dark?: IThemeDecorationInstanceRenderOptions;
     }
 
+    // https://github.com/TypeFox/vscode/blob/70b8db24a37fafc77247de7f7cb5bb0195120ed0/src/vs/editor/common/editorCommon.ts#L552
     export interface IContentDecorationRenderOptions {
         contentText?: string;
-        contentIconPath?: string | UriComponents;
+        contentIconPath?: UriComponents;
 
         border?: string;
         borderColor?: string | ThemeColor;
@@ -231,6 +238,7 @@ declare module monaco.editor {
         dark?: IThemeDecorationRenderOptions;
     }
 
+    // https://github.com/TypeFox/vscode/blob/70b8db24a37fafc77247de7f7cb5bb0195120ed0/src/vs/editor/common/editorCommon.ts#L517
     export interface IThemeDecorationRenderOptions {
         backgroundColor?: string | ThemeColor;
 
@@ -251,10 +259,10 @@ declare module monaco.editor {
         textDecoration?: string;
         cursor?: string;
         color?: string | ThemeColor;
-        opacity?: number;
+        opacity?: string;
         letterSpacing?: string;
 
-        gutterIconPath?: string | UriComponents;
+        gutterIconPath?: UriComponents;
         gutterIconSize?: string;
 
         overviewRulerColor?: string | ThemeColor;
@@ -267,26 +275,23 @@ declare module monaco.editor {
 
 declare module monaco.commands {
 
+    export const CommandsRegistry: {
+        getCommands(): Map<string, { id: string, handler: (...args: any) => any }>;
+    };
+
     export interface ICommandEvent {
         commandId: string;
     }
 
     export interface ICommandService {
         readonly _onWillExecuteCommand: monaco.Emitter<ICommandEvent>;
-        executeCommand<T>(commandId: string, ...args: any[]): monaco.Promise<T>;
-        executeCommand(commandId: string, ...args: any[]): monaco.Promise<any>;
+        executeCommand<T>(commandId: string, ...args: any[]): Promise<T>;
+        executeCommand(commandId: string, ...args: any[]): Promise<any>;
     }
 
 }
 
 declare module monaco.actions {
-
-    export class MenuId {
-        /**
-         * The unique ID of the editor's context menu.
-         */
-        public static readonly EditorContext: MenuId;
-    }
 
     export interface ICommandAction {
         id: string;
@@ -304,8 +309,9 @@ declare module monaco.actions {
     export interface IMenuRegistry {
         /**
          * Retrieves all the registered menu items for the given menu.
+         * @param menuId - see https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/platform/actions/common/actions.ts#L66
          */
-        getMenuItems(menuId: MenuId | { id: string }): IMenuItem[];
+        getMenuItems(menuId: 7 /* EditorContext */): IMenuItem[];
     }
 
     /**
@@ -326,18 +332,13 @@ declare module monaco.platform {
 
 declare module monaco.keybindings {
 
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/platform/keybinding/common/keybindingResolver.ts#L20
     export class KeybindingResolver {
         static contextMatchesRules(context: monaco.contextKeyService.IContext, rules: monaco.contextkey.ContextKeyExpr): boolean;
     }
 
-    export const enum KeybindingType {
-        Simple = 1,
-        Chord = 2
-    }
-
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/base/common/keyCodes.ts#L443
     export class SimpleKeybinding {
-        public readonly type: KeybindingType;
-
         public readonly ctrlKey: boolean;
         public readonly shiftKey: boolean;
         public readonly altKey: boolean;
@@ -347,13 +348,9 @@ declare module monaco.keybindings {
         constructor(ctrlKey: boolean, shiftKey: boolean, altKey: boolean, metaKey: boolean, keyCode: KeyCode);
     }
 
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/base/common/keyCodes.ts#L503
     export class ChordKeybinding {
-        public readonly type: KeybindingType;
-
-        public readonly firstPart: SimpleKeybinding;
-        public readonly chordPart: SimpleKeybinding;
-
-        constructor(firstPart: SimpleKeybinding, chordPart: SimpleKeybinding);
+        readonly parts: SimpleKeybinding[];
     }
 
     export type Keybinding = SimpleKeybinding | ChordKeybinding;
@@ -365,18 +362,7 @@ declare module monaco.keybindings {
     }
 
     export interface ContextKeyExpr {
-        getType(): ContextKeyExprType;
-        keys(): string[];
         serialize(): string;
-    }
-
-    export enum ContextKeyExprType {
-        Defined = 1,
-        Not = 2,
-        Equals = 3,
-        NotEquals = 4,
-        And = 5,
-        Regex = 6
     }
 
     export interface IKeybindingsRegistry {
@@ -386,41 +372,59 @@ declare module monaco.keybindings {
         getDefaultKeybindings(): IKeybindingItem[];
     }
 
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/platform/keybinding/common/keybindingsRegistry.ts#L75
     export const KeybindingsRegistry: IKeybindingsRegistry;
 
-    export namespace KeyCodeUtils {
-        export function toString(key: any): string;
-    }
-
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/base/common/keyCodes.ts#L542
     export class ResolvedKeybindingPart {
         readonly ctrlKey: boolean;
         readonly shiftKey: boolean;
         readonly altKey: boolean;
         readonly metaKey: boolean;
 
-        readonly keyLabel: string;
-        readonly keyAriaLabel: string;
+        readonly keyLabel: string | null;
+        readonly keyAriaLabel: string | null;
 
-        constructor(ctrlKey: boolean, shiftKey: boolean, altKey: boolean, metaKey: boolean, kbLabel: string, kbAriaLabel: string);
+        constructor(ctrlKey: boolean, shiftKey: boolean, altKey: boolean, metaKey: boolean, kbLabel: string | null, kbAriaLabel: string | null);
     }
+
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/base/common/keyCodes.ts#L564
     export abstract class ResolvedKeybinding {
-        /**
-         * This prints the binding in a format suitable for ARIA.
-         */
-        public abstract getAriaLabel(): string;
-        /**
-         * Returns the firstPart, chordPart of the keybinding.
-         * For simple keybindings, the second element will be null.
-         */
-        public abstract getParts(): [ResolvedKeybindingPart, ResolvedKeybindingPart | undefined];
+        public abstract getLabel(): string | null;
+        public abstract getAriaLabel(): string | null;
+        public abstract getElectronAccelerator(): string | null;
+        public abstract getUserSettingsLabel(): string | null;
+        public abstract isWYSIWYG(): boolean;
+        public abstract isChord(): boolean;
+        public abstract getParts(): ResolvedKeybindingPart[];
+        public abstract getDispatchParts(): (string | null)[];
     }
 
-    export class USLayoutResolvedKeybinding extends ResolvedKeybinding {
-        constructor(actual: Keybinding, OS: monaco.platform.OperatingSystem);
-
-        public getAriaLabel(): string;
-        public getParts(): [ResolvedKeybindingPart, ResolvedKeybindingPart | undefined];
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/platform/keybinding/common/usLayoutResolvedKeybinding.ts#L13
+    export class USLayoutResolvedKeybinding {
+        public static getDispatchStr(keybinding: SimpleKeybinding): string;
     }
+
+    export interface Modifiers {
+        readonly ctrlKey: boolean;
+        readonly shiftKey: boolean;
+        readonly altKey: boolean;
+        readonly metaKey: boolean;
+    }
+
+    export interface KeyLabelProvider<T extends Modifiers> {
+        (keybinding: T): string | null;
+    }
+
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/base/common/keybindingLabels.ts#L28
+    export interface ModifierLabelProvider {
+        toLabel<T extends Modifiers>(OS: monaco.platform.OperatingSystem, parts: T[], keyLabelProvider: KeyLabelProvider<T>): string | null;
+    }
+
+    export const UILabelProvider: ModifierLabelProvider;
+    export const AriaLabelProvider: ModifierLabelProvider;
+    export const ElectronAcceleratorLabelProvider: ModifierLabelProvider;
+    export const UserSettingsLabelProvider: ModifierLabelProvider;
 
 }
 
@@ -434,6 +438,8 @@ declare module monaco.services {
     }
 
     export class ConfigurationChangeEvent {
+        // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/platform/configuration/common/configuration.ts#L30-L38
+        _source?: number;
         change(keys: string[]): ConfigurationChangeEvent;
     }
 
@@ -442,11 +448,14 @@ declare module monaco.services {
         _configuration: Configuration;
     }
 
+    export interface ITextResourcePropertiesService {
+    }
+
     export abstract class CodeEditorServiceImpl implements monaco.editor.ICodeEditorService {
         constructor(themeService: IStandaloneThemeService);
         abstract getActiveCodeEditor(): monaco.editor.ICodeEditor | undefined;
         abstract openCodeEditor(input: monaco.editor.IResourceInput, source?: monaco.editor.ICodeEditor,
-            sideBySide?: boolean): monaco.Promise<monaco.editor.CommonCodeEditor | undefined>;
+            sideBySide?: boolean): Promise<monaco.editor.CommonCodeEditor | undefined>;
         registerDecorationType: monaco.editor.ICodeEditorService['registerDecorationType'];
         removeDecorationType: monaco.editor.ICodeEditorService['removeDecorationType'];
         resolveDecorationOptions: monaco.editor.ICodeEditorService['resolveDecorationOptions'];
@@ -455,8 +464,8 @@ declare module monaco.services {
     export class StandaloneCommandService implements monaco.commands.ICommandService {
         constructor(instantiationService: monaco.instantiation.IInstantiationService);
         readonly _onWillExecuteCommand: monaco.Emitter<monaco.commands.ICommandEvent>;
-        executeCommand<T>(commandId: string, ...args: any[]): monaco.Promise<T>;
-        executeCommand(commandId: string, ...args: any[]): monaco.Promise<any>;
+        executeCommand<T>(commandId: string, ...args: any[]): Promise<T>;
+        executeCommand(commandId: string, ...args: any[]): Promise<any>;
     }
 
     export class LazyStaticService<T> {
@@ -469,6 +478,7 @@ declare module monaco.services {
 
     export interface IStandaloneTheme {
         tokenTheme: TokenTheme;
+        getColor(color: string): Color | undefined;
     }
 
     export interface TokenTheme {
@@ -487,38 +497,25 @@ declare module monaco.services {
         a: number;
     }
 
-    export enum LanguageId {
-        Null = 0,
-        PlainText = 1
-    }
-
     export class LanguageIdentifier {
-        /**
-         * A string identifier. Unique across languages. e.g. 'javascript'.
-         */
         readonly language: string;
-
-        /**
-         * A numeric identifier. Unique across languages. e.g. 5
-         * Will vary at runtime based on registration order, etc.
-         */
-        readonly id: LanguageId;
     }
 
+    // https://github.com/TypeFox/vscode/blob/70b8db24a37fafc77247de7f7cb5bb0195120ed0/src/vs/editor/common/services/modeService.ts#L30
     export interface IModeService {
-        getOrCreateModeByFilenameOrFirstLine(filename: string, firstLine?: string): monaco.Promise<IMode>;
+        createByFilepathOrFirstLine(rsource: monaco.Uri | null, firstLine?: string): ILanguageSelection
     }
 
-    export interface IMode {
-
-        getId(): string;
-
-        getLanguageIdentifier(): LanguageIdentifier;
-
+    export interface ILanguageSelection {
+        readonly languageIdentifier: LanguageIdentifier;
     }
 
     export interface ServiceCollection {
         set<T>(id: any, instanceOrDescriptor: T): T;
+    }
+
+    export interface IMarkerService {
+        read(filter?: { owner?: string; resource?: monaco.Uri; severities?: number, take?: number; }): editor.IMarkerData[];
     }
 
     export module StaticServices {
@@ -527,6 +524,9 @@ declare module monaco.services {
         export const modeService: LazyStaticService<IModeService>;
         export const codeEditorService: LazyStaticService<monaco.editor.ICodeEditorService>;
         export const configurationService: LazyStaticService<IConfigurationService>;
+        export const resourcePropertiesService: LazyStaticService<ITextResourcePropertiesService>;
+        export const instantiationService: LazyStaticService<monaco.instantiation.IInstantiationService>;
+        export const markerService: LazyStaticService<IMarkerService>;
     }
 }
 
@@ -537,6 +537,37 @@ declare module monaco.theme {
     }
     export interface IThemable { }
     export function attachQuickOpenStyler(widget: IThemable, themeService: IThemeService): monaco.IDisposable;
+}
+
+declare module monaco.color {
+    export class RGBA {
+        constructor(r: number, g: number, b: number, a?: number);
+    }
+    export class HSLA {
+        constructor(h: number, s: number, l: number, a: number);
+    }
+    export class Color {
+        constructor(arg: RGBA | HSLA);
+    }
+    export interface ColorContribution {
+        readonly id: string;
+    }
+    export type ColorFunction = () => string | Color;
+    export type ColorValue = string | Color | ColorFunction;
+    export interface ColorDefaults {
+        light?: ColorValue;
+        dark?: ColorValue;
+        hc?: ColorValue;
+    }
+    export interface IColorRegistry {
+        getColors(): ColorContribution[];
+        registerColor(id: string, defaults: ColorDefaults | undefined, description: string): string;
+        deregisterColor(id: string): void;
+    }
+    export function getColorRegistry(): IColorRegistry;
+    export function darken(colorValue: ColorValue, factor: number): ColorFunction;
+    export function lighten(colorValue: ColorValue, factor: number): ColorFunction;
+    export function transparent(colorValue: ColorValue, factor: number): ColorFunction;
 }
 
 declare module monaco.referenceSearch {
@@ -664,11 +695,8 @@ declare module monaco.quickOpen {
          */
         autoFocusPrefixMatch?: string;
     }
-    export enum Mode {
-        PREVIEW,
-        OPEN,
-        OPEN_IN_BACKGROUND
-    }
+    // https://github.com/TypeFox/vscode/blob/monaco/0.18.0/src/vs/base/parts/quickopen/common/quickOpen.ts#L43-L48
+    export type Mode = 0 /* PREVIEW */ | 1 /* OPEN */ | 2 /* OPEN_IN_BACKGROUND */;
     export interface IEntryRunContext {
         event: any;
         keymods: number[];
@@ -743,8 +771,25 @@ declare module monaco.quickOpen {
         setShowBorder(showBorder: boolean): void;
         getEntry(): QuickOpenEntry | undefined;
     }
+
+    export interface IAction extends IDisposable {
+        id: string;
+        label: string;
+        tooltip: string;
+        class: string | undefined;
+        enabled: boolean;
+        checked: boolean;
+        radio: boolean;
+        run(event?: any): PromiseLike<any>;
+    }
+
+    export interface IActionProvider {
+        hasActions(element: any, item: any): boolean;
+        getActions(element: any, item: any): ReadonlyArray<IAction>;
+    }
+
     export class QuickOpenModel implements IModel<QuickOpenEntry>, IDataSource<QuickOpenEntry>, IFilter<QuickOpenEntry>, IRunner<QuickOpenEntry> {
-        constructor(entries?: QuickOpenEntry[] /*, actionProvider?: IActionProvider */);
+        constructor(entries?: QuickOpenEntry[], actionProvider?: IActionProvider);
         addEntries(entries: QuickOpenEntry[]): void;
         entries: QuickOpenEntry[];
         dataSource: IDataSource<QuickOpenEntry>;
@@ -809,80 +854,6 @@ declare module monaco.modes {
         public static getInlineStyleFromMetadata(metadata: number, colorMap: string[]): string;
     }
 
-    export type SuggestionType = 'method'
-        | 'function'
-        | 'constructor'
-        | 'field'
-        | 'variable'
-        | 'class'
-        | 'struct'
-        | 'interface'
-        | 'module'
-        | 'property'
-        | 'event'
-        | 'operator'
-        | 'unit'
-        | 'value'
-        | 'constant'
-        | 'enum'
-        | 'enum-member'
-        | 'keyword'
-        | 'snippet'
-        | 'text'
-        | 'color'
-        | 'file'
-        | 'reference'
-        | 'customcolor'
-        | 'folder'
-        | 'type-parameter';
-
-    export type SnippetType = 'internal' | 'textmate';
-
-    export interface ISuggestion {
-        label: string;
-        insertText: string;
-        type: SuggestionType;
-        detail?: string;
-        documentation?: string | IMarkdownString;
-        filterText?: string;
-        sortText?: string;
-        preselect?: boolean;
-        noAutoAccept?: boolean;
-        commitCharacters?: string[];
-        overwriteBefore?: number;
-        overwriteAfter?: number;
-        additionalTextEdits?: editor.ISingleEditOperation[];
-        command?: monaco.languages.Command;
-        snippetType?: SnippetType;
-    }
-
-    export interface ISuggestResult {
-        suggestions: ISuggestion[];
-        incomplete?: boolean;
-        dispose?(): void;
-    }
-
-    export enum CompletionTriggerKind {
-        Invoke = 0,
-        TriggerCharacter = 1,
-        TriggerForIncompleteCompletions = 2,
-    }
-
-    export interface SuggestContext {
-        triggerKind: CompletionTriggerKind;
-        triggerCharacter?: string;
-    }
-
-    export interface ISuggestSupport {
-
-        triggerCharacters?: string[];
-
-        // tslint:disable-next-line:max-line-length
-        provideCompletionItems(model: monaco.editor.ITextModel, position: Position, context: SuggestContext, token: CancellationToken): ISuggestResult | Thenable<ISuggestResult | undefined> | undefined;
-
-        resolveCompletionItem?(model: monaco.editor.ITextModel, position: Position, item: ISuggestion, token: CancellationToken): ISuggestion | Thenable<ISuggestion>;
-    }
-
     export interface IRelativePattern {
         base: string;
         pattern: string;
@@ -910,85 +881,40 @@ declare module monaco.modes {
 
     export const DocumentSymbolProviderRegistry: LanguageFeatureRegistry<monaco.languages.DocumentSymbolProvider>;
 
-    export const SuggestRegistry: LanguageFeatureRegistry<ISuggestSupport>;
+    export const CompletionProviderRegistry: LanguageFeatureRegistry<monaco.languages.CompletionItemProvider>;
+
+    export const CodeActionProviderRegistry: LanguageFeatureRegistry<monaco.languages.CodeActionProvider & { providedCodeActionKinds?: string[] }>;
 }
 
 declare module monaco.suggest {
 
-    export type SnippetConfig = 'top' | 'bottom' | 'inline' | 'none';
+    export const enum SnippetSortOrder {
+        Top, Inline, Bottom
+    }
 
-    export interface ISuggestionItem {
-        suggestion: monaco.modes.ISuggestion;
+    export interface CompletionItem {
+        completion: monaco.languages.CompletionItem;
+    }
+
+    export class CompletionOptions {
+
+        constructor(
+            snippetSortOrder?: SnippetSortOrder,
+            kindFilter?: Set<languages.CompletionItemKind>,
+            providerFilter?: Set<languages.CompletionItemProvider>,
+        );
+
     }
 
     export function provideSuggestionItems(
         model: monaco.editor.ITextModel,
         position: Position,
-        snippetConfig?: SnippetConfig,
-        onlyFrom?: monaco.modes.ISuggestSupport[],
-        context?: monaco.modes.SuggestContext,
+        options?: CompletionOptions,
+        context?: monaco.languages.CompletionContext,
         token?: monaco.CancellationToken
-    ): Promise<ISuggestionItem[]>;
+    ): Promise<CompletionItem[]>;
 
-    export function setSnippetSuggestSupport(support: monaco.modes.ISuggestSupport): monaco.modes.ISuggestSupport;
-
-}
-
-declare module monaco.suggestController {
-
-    export class SuggestWidget {
-        suggestWidgetVisible: {
-            get(): boolean;
-        };
-    }
-
-    export class SuggestController {
-
-        getId(): string;
-        dispose(): void;
-
-        /**
-         * This is a hack. The widget has a `private` visibility in the VSCode source.
-         */
-        readonly _widget: SuggestWidget | undefined;
-
-    }
-
-}
-
-declare module monaco.findController {
-
-    export class CommonFindController {
-
-        getId(): string;
-        dispose(): void;
-
-        /**
-         * Hack for checking whether the find (and replace) widget is visible in code editor or not.
-         */
-        readonly _findWidgetVisible: {
-            get(): boolean;
-        };
-
-    }
-
-}
-
-declare module monaco.rename {
-
-    export class RenameController {
-
-        getId(): string;
-        dispose(): void;
-
-        /**
-         * Hack for checking whether the rename input HTML element is visible in the code editor or not. In VSCode source this is has `private` visibility.
-         */
-        readonly _renameInputVisible: {
-            get(): boolean;
-        };
-
-    }
+    export function setSnippetSuggestSupport(support: monaco.languages.CompletionItemProvider): monaco.languages.CompletionItemProvider;
 
 }
 
@@ -1012,18 +938,72 @@ declare module monaco.contextKeyService {
 
     export interface IContext { }
 
+    export interface IContextKeyChangeEvent {
+        affectsSome(keys: Set<string>): boolean;
+    }
+
     export class ContextKeyService implements IContextKeyService {
         constructor(configurationService: monaco.services.IConfigurationService);
         createScoped(target?: HTMLElement): IContextKeyService;
         getContext(target?: HTMLElement): IContext;
         createKey<T>(key: string, defaultValue: T | undefined): IContextKey<T>;
         contextMatchesRules(rules: monaco.contextkey.ContextKeyExpr | undefined): boolean;
+        onDidChangeContext: monaco.IEvent<IContextKeyChangeEvent>;
     }
 
 }
 
 declare module monaco.contextkey {
     export class ContextKeyExpr {
+        keys(): string[];
         static deserialize(when: string): ContextKeyExpr;
     }
+}
+
+declare module monaco.mime {
+    export interface ITextMimeAssociation {
+        readonly id: string;
+        readonly mime: string;
+        readonly filename?: string;
+        readonly extension?: string;
+        readonly filepattern?: string;
+        readonly firstline?: RegExp;
+        readonly userConfigured?: boolean;
+    }
+
+    export function registerTextMime(association: monaco.mime.ITextMimeAssociation, warnOnOverwrite: boolean): void;
+
+    export function clearTextMimes(onlyUserConfigured?: boolean): void;
+}
+
+declare module monaco.error {
+    export function onUnexpectedError(e: any): undefined;
+}
+
+/**
+ * overloading languages register functions to accept LanguageSelector,
+ * check that all register functions passing a selector to registries:
+ * https://github.com/TypeFox/vscode/blob/70b8db24a37fafc77247de7f7cb5bb0195120ed0/src/vs/editor/standalone/browser/standaloneLanguages.ts#L335-L497
+ */
+declare module monaco.languages {
+    export function registerReferenceProvider(selector: monaco.modes.LanguageSelector, provider: ReferenceProvider): IDisposable;
+    export function registerRenameProvider(selector: monaco.modes.LanguageSelector, provider: RenameProvider): IDisposable;
+    export function registerSignatureHelpProvider(selector: monaco.modes.LanguageSelector, provider: SignatureHelpProvider): IDisposable;
+    export function registerHoverProvider(selector: monaco.modes.LanguageSelector, provider: HoverProvider): IDisposable;
+    export function registerDocumentSymbolProvider(selector: monaco.modes.LanguageSelector, provider: DocumentSymbolProvider): IDisposable;
+    export function registerDocumentHighlightProvider(selector: monaco.modes.LanguageSelector, provider: DocumentHighlightProvider): IDisposable;
+    export function registerDefinitionProvider(selector: monaco.modes.LanguageSelector, provider: DefinitionProvider): IDisposable;
+    export function registerImplementationProvider(selector: monaco.modes.LanguageSelector, provider: ImplementationProvider): IDisposable;
+    export function registerTypeDefinitionProvider(selector: monaco.modes.LanguageSelector, provider: TypeDefinitionProvider): IDisposable;
+    export function registerCodeLensProvider(selector: monaco.modes.LanguageSelector, provider: CodeLensProvider): IDisposable;
+    export function registerCodeActionProvider(selector: monaco.modes.LanguageSelector, provider: CodeActionProvider): IDisposable;
+    export function registerDocumentFormattingEditProvider(selector: monaco.modes.LanguageSelector, provider: DocumentFormattingEditProvider): IDisposable;
+    export function registerDocumentRangeFormattingEditProvider(selector: monaco.modes.LanguageSelector, provider: DocumentRangeFormattingEditProvider): IDisposable;
+    export function registerOnTypeFormattingEditProvider(selector: monaco.modes.LanguageSelector, provider: OnTypeFormattingEditProvider): IDisposable;
+    export function registerLinkProvider(selector: monaco.modes.LanguageSelector, provider: LinkProvider): IDisposable;
+    export function registerCompletionItemProvider(selector: monaco.modes.LanguageSelector, provider: CompletionItemProvider): IDisposable;
+    export function registerColorProvider(selector: monaco.modes.LanguageSelector, provider: DocumentColorProvider): IDisposable;
+    export function registerFoldingRangeProvider(selector: monaco.modes.LanguageSelector, provider: FoldingRangeProvider): IDisposable;
+    export function registerDeclarationProvider(selector: monaco.modes.LanguageSelector, provider: DeclarationProvider): IDisposable;
+    export function registerSelectionRangeProvider(selector: monaco.modes.LanguageSelector, provider: SelectionRangeProvider): IDisposable;
 }

@@ -16,7 +16,7 @@
 
 import * as theia from '@theia/plugin';
 import { BackendInitializationFn } from '../../../common/plugin-protocol';
-import { PluginAPIFactory, Plugin, emptyPlugin } from '../../../api/plugin-api';
+import { PluginAPIFactory, Plugin, emptyPlugin } from '../../../common/plugin-api-rpc';
 
 const pluginsApiImpl = new Map<string, typeof theia>();
 const plugins = new Array<Plugin>();
@@ -30,11 +30,11 @@ export const doInitialization: BackendInitializationFn = (apiFactory: PluginAPIF
     pluginsApiImpl.set(plugin.model.id, apiImpl);
 
     plugins.push(plugin);
+    pluginApiFactory = apiFactory;
 
     if (!isLoadOverride) {
         overrideInternalLoad();
         isLoadOverride = true;
-        pluginApiFactory = apiFactory;
     }
 
 };
@@ -46,7 +46,7 @@ function overrideInternalLoad(): void {
 
     // if we try to resolve theia module, return the filename entry to use cache.
     // tslint:disable-next-line:no-any
-    module._load = function (request: string, parent: any, isMain: {}) {
+    module._load = function (request: string, parent: any, isMain: {}): any {
         if (request !== '@theia/plugin') {
             return internalLoad.apply(this, arguments);
         }

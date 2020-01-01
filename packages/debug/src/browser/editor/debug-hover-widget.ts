@@ -19,8 +19,8 @@ import debounce = require('lodash.debounce');
 import { Widget } from '@phosphor/widgets';
 import { Message } from '@phosphor/messaging';
 import { injectable, postConstruct, inject, Container, interfaces } from 'inversify';
+import { Key } from '@theia/core/lib/browser';
 import { SourceTreeWidget } from '@theia/core/lib/browser/source-tree';
-import { Key } from '@theia/core/lib/browser/keys';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { DebugSessionManager } from '../debug-session-manager';
 import { DebugEditor } from './debug-editor';
@@ -159,7 +159,7 @@ export class DebugHoverWidget extends SourceTreeWidget implements monaco.editor.
         }
         super.show();
         this.options = options;
-        const expression = this.expressionProvider.get(this.editor.getControl().getModel(), options.selection);
+        const expression = this.expressionProvider.get(this.editor.getControl().getModel()!, options.selection);
         if (!expression) {
             this.hide();
             return;
@@ -181,7 +181,7 @@ export class DebugHoverWidget extends SourceTreeWidget implements monaco.editor.
     protected isEditorFrame(): boolean {
         const { currentFrame } = this.sessions;
         return !!currentFrame && !!currentFrame.source &&
-            this.editor.getControl().getModel().uri.toString() === currentFrame.source.uri.toString();
+            this.editor.getControl().getModel()!.uri.toString() === currentFrame.source.uri.toString();
     }
 
     getPosition(): monaco.editor.IContentWidgetPosition {
@@ -189,7 +189,7 @@ export class DebugHoverWidget extends SourceTreeWidget implements monaco.editor.
             return undefined!;
         }
         const position = this.options && this.options.selection.getStartPosition();
-        const word = position && this.editor.getControl().getModel().getWordAtPosition(position);
+        const word = position && this.editor.getControl().getModel()!.getWordAtPosition(position);
         return position && word ? {
             position: new monaco.Position(position.lineNumber, word.startColumn),
             preference: [

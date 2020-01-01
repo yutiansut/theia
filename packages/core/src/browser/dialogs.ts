@@ -15,9 +15,10 @@
  ********************************************************************************/
 
 import { injectable, inject } from 'inversify';
-import { Disposable } from '../common';
-import { Key } from './keys';
-import { Widget, BaseWidget, Message } from './widgets';
+import { Disposable, MaybePromise, CancellationTokenSource } from '../common';
+import { Key } from './keyboard/keys';
+import { Widget, BaseWidget, Message, addKeyListener } from './widgets';
+import { FrontendApplicationContribution } from './frontend-application';
 
 @injectable()
 export class DialogProps {
@@ -49,6 +50,61 @@ export namespace DialogError {
         }
         return error.message;
     }
+}
+
+@injectable()
+export class DialogOverlayService implements FrontendApplicationContribution {
+
+    protected static INSTANCE: DialogOverlayService;
+
+    static get(): DialogOverlayService {
+        return DialogOverlayService.INSTANCE;
+    }
+
+    // tslint:disable-next-line:no-any
+    protected readonly dialogs: AbstractDialog<any>[] = [];
+
+    constructor() {
+        addKeyListener(document.body, Key.ENTER, e => this.handleEnter(e));
+        addKeyListener(document.body, Key.ESCAPE, e => this.handleEscape(e));
+    }
+
+    initialize(): void {
+        DialogOverlayService.INSTANCE = this;
+    }
+
+    // tslint:disable-next-line:no-any
+    protected get currentDialog(): AbstractDialog<any> | undefined {
+        return this.dialogs[0];
+    }
+
+    // tslint:disable-next-line:no-any
+    push(dialog: AbstractDialog<any>): Disposable {
+        this.dialogs.unshift(dialog);
+        return Disposable.create(() => {
+            const index = this.dialogs.indexOf(dialog);
+            if (index > -1) {
+                this.dialogs.splice(index, 1);
+            }
+        });
+    }
+
+    protected handleEscape(event: KeyboardEvent): boolean | void {
+        const dialog = this.currentDialog;
+        if (dialog) {
+            return dialog['handleEscape'](event);
+        }
+        return false;
+    }
+
+    protected handleEnter(event: KeyboardEvent): boolean | void {
+        const dialog = this.currentDialog;
+        if (dialog) {
+            return dialog['handleEnter'](event);
+        }
+        return false;
+    }
+
 }
 
 @injectable()
@@ -144,8 +200,8 @@ export abstract class AbstractDialog<T> extends BaseWidget {
             this.addAcceptAction(this.acceptButton, 'click');
         }
         this.addCloseAction(this.closeCrossNode, 'click');
-        this.addKeyListener(document.body, Key.ESCAPE, e => this.handleEscape(e));
-        this.addKeyListener(document.body, Key.ENTER, e => this.handleEnter(e));
+        // TODO: use DI always to create dialog instances
+        this.toDisposeOnDetach.push(DialogOverlayService.get().push(this));
     }
 
     protected handleEscape(event: KeyboardEvent): boolean | void {
@@ -187,38 +243,52 @@ export abstract class AbstractDialog<T> extends BaseWidget {
     close(): void {
         if (this.resolve) {
             if (this.activeElement) {
-                this.activeElement.focus();
+                this.activeElement.focus({ preventScroll: true });
             }
             this.resolve(undefined);
         }
         this.activeElement = undefined;
         super.close();
     }
-
     protected onUpdateRequest(msg: Message): void {
         super.onUpdateRequest(msg);
         this.validate();
     }
 
-    protected validate(): void {
+    protected validateCancellationSource = new CancellationTokenSource();
+    protected async validate(): Promise<void> {
         if (!this.resolve) {
             return;
         }
+        this.validateCancellationSource.cancel();
+        this.validateCancellationSource = new CancellationTokenSource();
+        const token = this.validateCancellationSource.token;
         const value = this.value;
-        const error = this.isValid(value, 'preview');
+        const error = await this.isValid(value, 'preview');
+        if (token.isCancellationRequested) {
+            return;
+        }
         this.setErrorMessage(error);
     }
 
-    protected accept(): void {
-        if (this.resolve) {
-            const value = this.value;
-            const error = this.isValid(value, 'open');
-            if (!DialogError.getResult(error)) {
-                this.setErrorMessage(error);
-            } else {
-                this.resolve(value);
-                Widget.detach(this);
-            }
+    protected acceptCancellationSource = new CancellationTokenSource();
+    protected async accept(): Promise<void> {
+        if (!this.resolve) {
+            return;
+        }
+        this.acceptCancellationSource.cancel();
+        this.acceptCancellationSource = new CancellationTokenSource();
+        const token = this.acceptCancellationSource.token;
+        const value = this.value;
+        const error = await this.isValid(value, 'open');
+        if (token.isCancellationRequested) {
+            return;
+        }
+        if (!DialogError.getResult(error)) {
+            this.setErrorMessage(error);
+        } else {
+            this.resolve(value);
+            Widget.detach(this);
         }
     }
 
@@ -227,7 +297,7 @@ export abstract class AbstractDialog<T> extends BaseWidget {
     /**
      * Return a string of zero-length or true if valid.
      */
-    protected isValid(value: T, mode: DialogMode): DialogError {
+    protected isValid(value: T, mode: DialogMode): MaybePromise<DialogError> {
         return '';
     }
 
@@ -299,7 +369,7 @@ export class SingleTextInputDialogProps extends DialogProps {
         end: number
         direction?: 'forward' | 'backward' | 'none'
     };
-    readonly validate?: (input: string, mode: DialogMode) => DialogError;
+    readonly validate?: (input: string, mode: DialogMode) => MaybePromise<DialogError>;
 }
 
 export class SingleTextInputDialog extends AbstractDialog<string> {
@@ -313,6 +383,7 @@ export class SingleTextInputDialog extends AbstractDialog<string> {
 
         this.inputField = document.createElement('input');
         this.inputField.type = 'text';
+        this.inputField.className = 'theia-input';
         this.inputField.setAttribute('style', 'flex: 0;');
         this.inputField.value = props.initialValue || '';
         if (props.initialSelectionRange) {
@@ -333,7 +404,7 @@ export class SingleTextInputDialog extends AbstractDialog<string> {
         return this.inputField.value;
     }
 
-    protected isValid(value: string, mode: DialogMode): DialogError {
+    protected isValid(value: string, mode: DialogMode): MaybePromise<DialogError> {
         if (this.props.validate) {
             return this.props.validate(value, mode);
         }
@@ -347,6 +418,13 @@ export class SingleTextInputDialog extends AbstractDialog<string> {
 
     protected onActivateRequest(msg: Message): void {
         this.inputField.focus();
+    }
+
+    protected handleEnter(event: KeyboardEvent): boolean | void {
+        if (event.target instanceof HTMLInputElement) {
+            return super.handleEnter(event);
+        }
+        return false;
     }
 
 }

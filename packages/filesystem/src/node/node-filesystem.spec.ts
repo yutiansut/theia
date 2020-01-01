@@ -30,7 +30,7 @@ import { expectThrowsAsync } from '@theia/core/lib/common/test/expect';
 const expect = chai.expect;
 const track = temp.track();
 
-describe('NodeFileSystem', function () {
+describe('NodeFileSystem', function (): void {
 
     let root: URI;
     let fileSystem: FileSystem;
@@ -366,9 +366,9 @@ describe('NodeFileSystem', function () {
             await expectThrowsAsync(fileSystem.move(sourceUri.toString(), targetUri.toString(), { overwrite: true }), Error);
         });
 
-        it('Moving a non-empty directory to an empty directory. Source folder and its content should be moved to the target location.', async function () {
+        it('Moving a non-empty directory to an empty directory. Source folder and its content should be moved to the target location.', async function (): Promise<void> {
             if (isWindows) {
-                // https://github.com/theia-ide/theia/issues/2088
+                // https://github.com/eclipse-theia/theia/issues/2088
                 this.skip();
                 return;
             }
@@ -444,6 +444,14 @@ describe('NodeFileSystem', function () {
             expect(fs.statSync(FileUri.fsPath(targetUri)).isDirectory()).to.be.true;
 
             await expectThrowsAsync(fileSystem.copy(sourceUri.toString(), targetUri.toString()), Error);
+        });
+
+        it('Copy a file to existing location with the same file name. Should be rejected with an error.', async () => {
+            const sourceUri = root.resolve('foo');
+            fs.mkdirSync(FileUri.fsPath(sourceUri));
+            expect(fs.statSync(FileUri.fsPath(sourceUri)).isDirectory()).to.be.true;
+
+            await expectThrowsAsync(fileSystem.copy(sourceUri.toString(), sourceUri.toString()), Error);
         });
 
         it('Copy an empty directory to a non-existing location. Should return with the file stat representing the new file at the target location.', async () => {
@@ -770,7 +778,7 @@ describe('NodeFileSystem', function () {
 
     describe('#16 drives', async () => {
 
-        it('should list URIs of the drives', async function () {
+        it('should list URIs of the drives', async function (): Promise<void> {
             this.timeout(10_000);
             const drives = await createFileSystem().getDrives();
             expect(drives).to.be.not.empty;
@@ -780,11 +788,11 @@ describe('NodeFileSystem', function () {
 
     describe('#17 fsPath', async () => {
 
-        it('should return undefined', async function () {
+        it('should return undefined', async function (): Promise<void> {
             expect(await createFileSystem().getFsPath('http://www.theia-ide.org')).to.be.undefined;
         });
 
-        it('should return a platform specific path', async function () {
+        it('should return a platform specific path', async function (): Promise<void> {
             if (isWindows) {
                 expect(await createFileSystem().getFsPath('file:///C:/user/theia')).to.be.equal('c:\\user\\theia');
                 expect(await createFileSystem().getFsPath('file:///C%3A/user/theia')).to.be.equal('c:\\user\\theia');
@@ -798,7 +806,7 @@ describe('NodeFileSystem', function () {
         return new FileSystemNode();
     }
 
-    function sleep(time: number) {
+    function sleep(time: number): Promise<unknown> {
         return new Promise(resolve => setTimeout(resolve, time));
     }
 

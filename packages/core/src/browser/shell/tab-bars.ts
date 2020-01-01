@@ -17,13 +17,17 @@
 import PerfectScrollbar from 'perfect-scrollbar';
 import { TabBar, Title, Widget } from '@phosphor/widgets';
 import { VirtualElement, h, VirtualDOM, ElementInlineStyle } from '@phosphor/virtualdom';
-import { MenuPath } from '../../common';
+import { Disposable, DisposableCollection, MenuPath, notEmpty } from '../../common';
 import { ContextMenuRenderer } from '../context-menu-renderer';
-import { Signal } from '@phosphor/signaling';
+import { Signal, Slot } from '@phosphor/signaling';
 import { Message } from '@phosphor/messaging';
 import { ArrayExt } from '@phosphor/algorithm';
 import { ElementExt } from '@phosphor/domutils';
 import { TabBarToolbarRegistry, TabBarToolbar } from './tab-bar-toolbar';
+import { TheiaDockPanel, MAIN_AREA_ID, BOTTOM_AREA_ID } from './theia-dock-panel';
+import { WidgetDecoration } from '../widget-decoration';
+import { TabBarDecoratorService } from './tab-bar-decorator';
+import { IconThemeService } from '../icon-theme-service';
 
 /** The class name added to hidden content nodes, which are required to render vertical side bars. */
 const HIDDEN_CONTENT_CLASS = 'theia-TabBar-hidden-content';
@@ -61,38 +65,89 @@ export interface SideBarRenderData extends TabBar.IRenderData<Widget> {
 export class TabBarRenderer extends TabBar.Renderer {
 
     /**
-     * A reference to the tab bar is required in order to activate it when a context menu
-     * is requested.
-     */
-    tabBar?: TabBar<Widget>;
-    /**
      * The menu path used to render the context menu.
      */
     contextMenuPath?: MenuPath;
 
-    constructor(protected readonly contextMenuRenderer?: ContextMenuRenderer) {
+    protected readonly toDispose = new DisposableCollection();
+
+    // TODO refactor shell, rendered should only receive props with event handlers
+    // events should be handled by clients, like ApplicationShell
+    // right now it is mess: (1) client logic belong to renderer, (2) cyclic dependencies between renderes and clients
+    constructor(
+        protected readonly contextMenuRenderer?: ContextMenuRenderer,
+        protected readonly decoratorService?: TabBarDecoratorService,
+        protected readonly iconThemeService?: IconThemeService
+    ) {
         super();
+        if (this.decoratorService) {
+            this.toDispose.push(Disposable.create(() => this.resetDecorations()));
+            this.toDispose.push(this.decoratorService);
+            this.toDispose.push(this.decoratorService.onDidChangeDecorations(() => this.resetDecorations()));
+        }
+        if (this.iconThemeService) {
+            this.toDispose.push(this.iconThemeService.onDidChangeCurrent(() => {
+                if (this._tabBar) {
+                    this._tabBar.update();
+                }
+            }));
+        }
+    }
+
+    protected _tabBar?: TabBar<Widget>;
+    protected readonly toDisposeOnTabBar = new DisposableCollection();
+    /**
+     * A reference to the tab bar is required in order to activate it when a context menu
+     * is requested.
+     */
+    set tabBar(tabBar: TabBar<Widget> | undefined) {
+        if (this._tabBar === tabBar) {
+            return;
+        }
+        this.toDisposeOnTabBar.dispose();
+        this.toDispose.push(this.toDisposeOnTabBar);
+        this._tabBar = tabBar;
+        if (tabBar) {
+            const listener: Slot<Widget, TabBar.ITabCloseRequestedArgs<Widget>> = (_, { title }) => this.resetDecorations(title);
+            tabBar.tabCloseRequested.connect(listener);
+            this.toDisposeOnTabBar.push(Disposable.create(() => tabBar.tabCloseRequested.disconnect(listener)));
+        }
+        this.resetDecorations();
+    }
+    get tabBar(): TabBar<Widget> | undefined {
+        return this._tabBar;
     }
 
     /**
-     * Render tabs with the default DOM structure, but additionally register a context
-     * menu listener.
+     * Render tabs with the default DOM structure, but additionally register a context menu listener.
+     * @param {SideBarRenderData} data Data used to render the tab.
+     * @param {boolean} isInSidePanel An optional check which determines if the tab is in the side-panel.
+     * @returns {VirtualElement} The virtual element of the rendered tab.
      */
-    renderTab(data: SideBarRenderData): VirtualElement {
+    renderTab(data: SideBarRenderData, isInSidePanel?: boolean): VirtualElement {
         const title = data.title;
+        const id = this.createTabId(data.title);
         const key = this.createTabKey(data);
         const style = this.createTabStyle(data);
         const className = this.createTabClass(data);
         const dataset = this.createTabDataset(data);
         return h.li(
             {
-                key, className, title: title.caption, style, dataset,
-                oncontextmenu: event => this.handleContextMenuEvent(event, title)
+                key, className, id, title: title.caption, style, dataset,
+                oncontextmenu: this.handleContextMenuEvent,
+                ondblclick: this.handleDblClickEvent
             },
-            this.renderIcon(data),
-            this.renderLabel(data),
+            h.div(
+                { className: 'theia-tab-icon-label' },
+                this.renderIcon(data, isInSidePanel),
+                this.renderLabel(data, isInSidePanel)
+            ),
             this.renderCloseIcon(data)
         );
+    }
+
+    createTabId(title: Title<Widget>): string {
+        return 'shell-tab-' + title.owner.id;
     }
 
     /**
@@ -119,10 +174,13 @@ export class TabBarRenderer extends TabBar.Renderer {
     }
 
     /**
-     * If size information is available for the label, set it as inline style. Tab padding
-     * and icon size are also considered in the `top` position.
+     * If size information is available for the label, set it as inline style.
+     * Tab padding and icon size are also considered in the `top` position.
+     * @param {SideBarRenderData} data Data used to render the tab.
+     * @param {boolean} isInSidePanel An optional check which determines if the tab is in the side-panel.
+     * @returns {VirtualElement} The virtual element of the rendered label.
      */
-    renderLabel(data: SideBarRenderData): VirtualElement {
+    renderLabel(data: SideBarRenderData, isInSidePanel?: boolean): VirtualElement {
         const labelSize = data.labelSize;
         const iconSize = data.iconSize;
         let width: string | undefined;
@@ -142,32 +200,227 @@ export class TabBarRenderer extends TabBar.Renderer {
             top = `${paddingTop + iconHeight}px`;
         }
         const style: ElementInlineStyle = { width, height, top };
+        // No need to check for duplicate labels if the tab is rendered in the side panel (title is not displayed),
+        // or if there are less than two files in the tab bar.
+        if (isInSidePanel || (this.tabBar && this.tabBar.titles.length < 2)) {
+            return h.div({ className: 'p-TabBar-tabLabel', style }, data.title.label);
+        }
+        const originalToDisplayedMap = this.findDuplicateLabels([...this.tabBar!.titles]);
+        const labelDetails: string | undefined = originalToDisplayedMap.get(data.title.caption);
+        if (labelDetails) {
+            return h.div({ className: 'p-TabBar-tabLabelWrapper' },
+                h.div({ className: 'p-TabBar-tabLabel', style }, data.title.label),
+                h.div({ className: 'p-TabBar-tabLabelDetails', style }, labelDetails));
+        }
         return h.div({ className: 'p-TabBar-tabLabel', style }, data.title.label);
+    }
+
+    protected readonly decorations = new Map<Title<Widget>, WidgetDecoration.Data[]>();
+
+    protected resetDecorations(title?: Title<Widget>): void {
+        if (title) {
+            this.decorations.delete(title);
+        } else {
+            this.decorations.clear();
+        }
+        if (this.tabBar) {
+            this.tabBar.update();
+        }
+    }
+
+    /**
+     * Get all available decorations of a given tab.
+     * @param {string} title The widget title.
+     */
+    protected getDecorations(title: Title<Widget>): WidgetDecoration.Data[] {
+        if (this.tabBar && this.decoratorService) {
+            // tslint:disable-next-line:no-any
+            const owner: { resetTabBarDecorations?: () => void; } & Widget = title.owner;
+            if (!owner.resetTabBarDecorations) {
+                owner.resetTabBarDecorations = () => this.decorations.delete(title);
+                title.owner.disposed.connect(owner.resetTabBarDecorations);
+            }
+
+            const decorations = this.decorations.get(title) || this.decoratorService.getDecorations(title);
+            this.decorations.set(title, decorations);
+            return decorations;
+        }
+        return [];
+    }
+
+    /**
+     * Get the decoration data given the tab URI and the decoration data type.
+     * @param {string} title The title.
+     * @param {K} key The type of the decoration data.
+     */
+    protected getDecorationData<K extends keyof WidgetDecoration.Data>(title: Title<Widget>, key: K): WidgetDecoration.Data[K][] {
+        return this.getDecorations(title).filter(data => data[key] !== undefined).map(data => data[key]);
+
+    }
+
+    /**
+     * Get the class of an icon.
+     * @param {string | string[]} iconName The name of the icon.
+     * @param {string[]} additionalClasses Additional classes of the icon.
+     */
+    private getIconClass(iconName: string | string[], additionalClasses: string[] = []): string {
+        const iconClass = (typeof iconName === 'string') ? ['a', 'fa', `fa-${iconName}`] : ['a'].concat(iconName);
+        return iconClass.concat(additionalClasses).join(' ');
+    }
+
+    /**
+     * Find duplicate labels from the currently opened tabs in the tab bar.
+     * Return the appropriate partial paths that can distinguish the identical labels.
+     *
+     * E.g., a/p/index.ts => a/..., b/p/index.ts => b/...
+     *
+     * To prevent excessively long path displayed, show at maximum three levels from the end by default.
+     * @param {Title<Widget>[]} titles Array of titles in the current tab bar.
+     * @returns {Map<string, string>} A map from each tab's original path to its displayed partial path.
+     */
+    findDuplicateLabels(titles: Title<Widget>[]): Map<string, string> {
+        // Filter from all tabs to group them by the distinct label (file name).
+        // E.g., 'foo.js' => {0 (index) => 'a/b/foo.js', '2 => a/c/foo.js' },
+        //       'bar.js' => {1 => 'a/d/bar.js', ...}
+        const labelGroups = new Map<string, Map<number, string>>();
+        titles.forEach((title, index) => {
+            if (!labelGroups.has(title.label)) {
+                labelGroups.set(title.label, new Map<number, string>());
+            }
+            labelGroups.get(title.label)!.set(index, title.caption);
+        });
+
+        const originalToDisplayedMap = new Map<string, string>();
+        // Parse each group of editors with the same label.
+        labelGroups.forEach(labelGroup => {
+            // Filter to get groups that have duplicates.
+            if (labelGroup.size > 1) {
+                const paths: string[][] = [];
+                let maxPathLength = 0;
+                labelGroup.forEach((pathStr, index) => {
+                    const steps = pathStr.split('/');
+                    maxPathLength = Math.max(maxPathLength, steps.length);
+                    paths[index] = (steps.slice(0, steps.length - 1));
+                    // By default, show at maximum three levels from the end.
+                    let defaultDisplayedPath = steps.slice(-4, -1).join('/');
+                    if (steps.length > 4) {
+                        defaultDisplayedPath = '.../' + defaultDisplayedPath;
+                    }
+                    originalToDisplayedMap.set(pathStr, defaultDisplayedPath);
+                });
+
+                // Iterate through the steps of the path from the left to find the step that can distinguish it.
+                // E.g., ['root', 'foo', 'c'], ['root', 'bar', 'd'] => 'foo', 'bar'
+                let i = 0;
+                while (i < maxPathLength - 1) {
+                    // Store indexes of all paths that have the identical element in each step.
+                    const stepOccurrences = new Map<string, number[]>();
+                    // Compare the current step of all paths
+                    paths.forEach((path, index) => {
+                        const step = path[i];
+                        if (path.length > 0) {
+                            if (i > path.length - 1) {
+                                paths[index] = [];
+                            } else if (!stepOccurrences.has(step)) {
+                                stepOccurrences.set(step, [index]);
+                            } else {
+                                stepOccurrences.get(step)!.push(index);
+                            }
+                        }
+                    });
+                    // Set the displayed path for each tab.
+                    stepOccurrences.forEach((indexArr, displayedPath) => {
+                        if (indexArr.length === 1) {
+                            const originalPath = labelGroup.get(indexArr[0]);
+                            if (originalPath) {
+                                const originalElements = originalPath.split('/');
+                                const displayedElements = displayedPath.split('/');
+                                if (originalElements.slice(-2)[0] !== displayedElements.slice(-1)[0]) {
+                                    displayedPath += '/...';
+                                }
+                                if (originalElements[0] !== displayedElements[0]) {
+                                    displayedPath = '.../' + displayedPath;
+                                }
+                                originalToDisplayedMap.set(originalPath, displayedPath);
+                                paths[indexArr[0]] = [];
+                            }
+                        }
+                    });
+                    i++;
+                }
+            }
+        });
+        return originalToDisplayedMap;
     }
 
     /**
      * If size information is available for the icon, set it as inline style. Tab padding
      * is also considered in the `top` position.
+     * @param {SideBarRenderData} data Data used to render the tab icon.
+     * @param {boolean} isInSidePanel An optional check which determines if the tab is in the side-panel.
      */
-    renderIcon(data: SideBarRenderData): VirtualElement {
+    renderIcon(data: SideBarRenderData, inSidePanel?: boolean): VirtualElement {
+        if (!inSidePanel && this.iconThemeService && this.iconThemeService.current === 'none') {
+            return h.div();
+        }
         let top: string | undefined;
         if (data.paddingTop) {
             top = `${data.paddingTop || 0}px`;
         }
-        const className = this.createIconClass(data);
         const style: ElementInlineStyle = { top };
-        return h.div({ className, style }, data.title.iconLabel);
+        const baseClassName = this.createIconClass(data);
+
+        const overlayIcons: VirtualElement[] = [];
+        const decorationData = this.getDecorationData(data.title, 'iconOverlay');
+
+        // Check if the tab has decoration markers to be rendered on top.
+        if (decorationData.length > 0) {
+            const baseIcon: VirtualElement = h.div({ className: baseClassName, style }, data.title.iconLabel);
+            const wrapperClassName: string = WidgetDecoration.Styles.ICON_WRAPPER_CLASS;
+            const decoratorSizeClassName: string = inSidePanel ? WidgetDecoration.Styles.DECORATOR_SIDEBAR_SIZE_CLASS : WidgetDecoration.Styles.DECORATOR_SIZE_CLASS;
+
+            decorationData
+                .filter(notEmpty)
+                .map(overlay => [overlay.position, overlay] as [WidgetDecoration.IconOverlayPosition, WidgetDecoration.IconOverlay | WidgetDecoration.IconClassOverlay])
+                .forEach(([position, overlay]) => {
+                    const iconAdditionalClasses: string[] = [decoratorSizeClassName, WidgetDecoration.IconOverlayPosition.getStyle(position, inSidePanel)];
+                    const overlayIconStyle = (color?: string) => {
+                        if (color === undefined) {
+                            return {};
+                        }
+                        return { color };
+                    };
+                    // Parse the optional background (if it exists) of the overlay icon.
+                    if (overlay.background) {
+                        const backgroundIconClassName = this.getIconClass(overlay.background.shape, iconAdditionalClasses);
+                        overlayIcons.push(
+                            h.div({ key: data.title.label + '-background', className: backgroundIconClassName, style: overlayIconStyle(overlay.background.color) })
+                        );
+                    }
+                    // Parse the overlay icon.
+                    const overlayIcon = (overlay as WidgetDecoration.IconOverlay).icon || (overlay as WidgetDecoration.IconClassOverlay).iconClass;
+                    const overlayIconClassName = this.getIconClass(overlayIcon, iconAdditionalClasses);
+                    overlayIcons.push(
+                        h.span({ key: data.title.label, className: overlayIconClassName, style: overlayIconStyle(overlay.color) })
+                    );
+                });
+            return h.div({ className: wrapperClassName, style }, [baseIcon, ...overlayIcons]);
+        }
+        return h.div({ className: baseClassName, style }, data.title.iconLabel);
     }
 
-    protected handleContextMenuEvent(event: MouseEvent, title: Title<Widget>) {
-        if (this.contextMenuRenderer && this.contextMenuPath) {
+    protected handleContextMenuEvent = (event: MouseEvent) => {
+        if (this.contextMenuRenderer && this.contextMenuPath && event.currentTarget instanceof HTMLElement) {
             event.stopPropagation();
             event.preventDefault();
 
-            if (this.tabBar !== undefined) {
+            if (this.tabBar) {
+                const id = event.currentTarget.id;
+                // tslint:disable-next-line:no-null-keyword
+                const title = this.tabBar.titles.find(t => this.createTabId(t) === id) || null;
                 this.tabBar.currentTitle = title;
                 this.tabBar.activate();
-                if (title.owner !== null) {
+                if (title) {
                     title.owner.activate();
                 }
             }
@@ -175,6 +428,19 @@ export class TabBarRenderer extends TabBar.Renderer {
             this.contextMenuRenderer.render(this.contextMenuPath, event);
         }
     }
+
+    protected handleDblClickEvent = (event: MouseEvent) => {
+        if (this.tabBar && event.currentTarget instanceof HTMLElement) {
+            const id = event.currentTarget.id;
+            // tslint:disable-next-line:no-null-keyword
+            const title = this.tabBar.titles.find(t => this.createTabId(t) === id) || null;
+            const area = title && title.owner.parent;
+            if (area instanceof TheiaDockPanel && (area.id === BOTTOM_AREA_ID || area.id === MAIN_AREA_ID)) {
+                area.toggleMaximized();
+            }
+        }
+    }
+
 }
 
 /**
@@ -358,6 +624,14 @@ export class ToolbarAwareTabBar extends ScrollableTabBar {
         this.toolbar.updateItems(items, widget);
     }
 
+    handleEvent(event: Event): void {
+        if (this.toolbar && event instanceof MouseEvent && this.toolbar.shouldHandleMouseEvent(event)) {
+            // if the mouse event is over the toolbar part don't handle it.
+            return;
+        }
+        super.handleEvent(event);
+    }
+
     /**
      * Restructures the DOM defined in PhosphorJS.
      *
@@ -516,7 +790,7 @@ export class SideTabBar extends ScrollableTabBar {
             } else {
                 rd = { title, current, zIndex };
             }
-            content[i] = renderer.renderTab(rd);
+            content[i] = renderer.renderTab(rd, true);
         }
         VirtualDOM.render(content, host);
     }

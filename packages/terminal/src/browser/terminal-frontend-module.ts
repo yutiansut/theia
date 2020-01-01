@@ -14,9 +14,13 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+import '../../src/browser/terminal.css';
+import 'xterm/lib/xterm.css';
+
 import { ContainerModule, Container } from 'inversify';
 import { CommandContribution, MenuContribution } from '@theia/core/lib/common';
-import { KeybindingContribution, WebSocketConnectionProvider, WidgetFactory, KeybindingContext } from '@theia/core/lib/browser';
+import { bindContributionProvider } from '@theia/core';
+import { KeybindingContribution, WebSocketConnectionProvider, WidgetFactory, KeybindingContext, QuickOpenContribution } from '@theia/core/lib/browser';
 import { TabBarToolbarContribution } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 import { TerminalFrontendContribution } from './terminal-frontend-contribution';
 import { TerminalWidgetImpl, TERMINAL_WIDGET_FACTORY_ID } from './terminal-widget-impl';
@@ -28,9 +32,14 @@ import { TerminalActiveContext } from './terminal-keybinding-contexts';
 import { createCommonBindings } from '../common/terminal-common-module';
 import { TerminalService } from './base/terminal-service';
 import { bindTerminalPreferences } from './terminal-preferences';
-
-import '../../src/browser/terminal.css';
-import 'xterm/lib/xterm.css';
+import { URLMatcher, LocalhostMatcher } from './terminal-linkmatcher';
+import { TerminalContribution } from './terminal-contribution';
+import { TerminalLinkmatcherFiles } from './terminal-linkmatcher-files';
+import { TerminalLinkmatcherDiffPre, TerminalLinkmatcherDiffPost } from './terminal-linkmatcher-diff';
+import { TerminalQuickOpenService, TerminalQuickOpenContribution } from './terminal-quick-open-service';
+import { TerminalCopyOnSelectionHandler } from './terminal-copy-on-selection-handler';
+import { ColorContribution } from '@theia/core/lib/browser/color-application-contribution';
+import { TerminalThemeService } from './terminal-theme-service';
 
 export default new ContainerModule(bind => {
     bindTerminalPreferences(bind);
@@ -60,9 +69,18 @@ export default new ContainerModule(bind => {
         }
     }));
 
+    bind(TerminalQuickOpenService).toSelf().inSingletonScope();
+    bind(TerminalCopyOnSelectionHandler).toSelf().inSingletonScope();
+
+    bind(TerminalQuickOpenContribution).toSelf().inSingletonScope();
+    for (const identifier of [CommandContribution, QuickOpenContribution]) {
+        bind(identifier).toService(TerminalQuickOpenContribution);
+    }
+
+    bind(TerminalThemeService).toSelf().inSingletonScope();
     bind(TerminalFrontendContribution).toSelf().inSingletonScope();
     bind(TerminalService).toService(TerminalFrontendContribution);
-    for (const identifier of [CommandContribution, MenuContribution, KeybindingContribution, TabBarToolbarContribution]) {
+    for (const identifier of [CommandContribution, MenuContribution, KeybindingContribution, TabBarToolbarContribution, ColorContribution]) {
         bind(identifier).toService(TerminalFrontendContribution);
     }
 
@@ -80,4 +98,22 @@ export default new ContainerModule(bind => {
     bind(IShellTerminalServer).toService(ShellTerminalServerProxy);
 
     createCommonBindings(bind);
+
+    // link matchers
+    bindContributionProvider(bind, TerminalContribution);
+
+    bind(URLMatcher).toSelf().inSingletonScope();
+    bind(TerminalContribution).toService(URLMatcher);
+
+    bind(LocalhostMatcher).toSelf().inSingletonScope();
+    bind(TerminalContribution).toService(LocalhostMatcher);
+
+    bind(TerminalLinkmatcherFiles).toSelf().inSingletonScope();
+    bind(TerminalContribution).toService(TerminalLinkmatcherFiles);
+
+    bind(TerminalLinkmatcherDiffPre).toSelf().inSingletonScope();
+    bind(TerminalContribution).toService(TerminalLinkmatcherDiffPre);
+
+    bind(TerminalLinkmatcherDiffPost).toSelf().inSingletonScope();
+    bind(TerminalContribution).toService(TerminalLinkmatcherDiffPost);
 });

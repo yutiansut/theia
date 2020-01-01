@@ -23,7 +23,7 @@ import { FrontendApplicationContribution } from './frontend-application';
 
 export const loggerFrontendModule = new ContainerModule(bind => {
     bind(FrontendApplicationContribution).toDynamicValue(ctx => ({
-        initialize() {
+        initialize(): void {
             setRootLogger(ctx.container.get<ILogger>(ILogger));
         }
     }));
@@ -35,7 +35,7 @@ export const loggerFrontendModule = new ContainerModule(bind => {
         const loggerWatcher = ctx.container.get(LoggerWatcher);
         const connection = ctx.container.get(WebSocketConnectionProvider);
         const target = connection.createProxy<ILoggerServer>(loggerPath, loggerWatcher.getLoggerClient());
-        function get<K extends keyof ILoggerServer>(_: ILoggerServer, property: K): ILoggerServer[K] {
+        function get<K extends keyof ILoggerServer>(_: ILoggerServer, property: K): ILoggerServer[K] | ILoggerServer['log'] {
             if (property === 'log') {
                 return (name, logLevel, message, params) => {
                     ConsoleLogger.log(name, logLevel, message, params);

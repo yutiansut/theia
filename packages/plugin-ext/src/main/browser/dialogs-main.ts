@@ -15,31 +15,30 @@
  ********************************************************************************/
 
 import { interfaces } from 'inversify';
-import { RPCProtocol } from '../../api/rpc-protocol';
-import { OpenDialogOptionsMain, SaveDialogOptionsMain, DialogsMain } from '../../api/plugin-api';
-import URI from '@theia/core/lib/common/uri';
+import { RPCProtocol } from '../../common/rpc-protocol';
+import { OpenDialogOptionsMain, SaveDialogOptionsMain, DialogsMain, UploadDialogOptionsMain } from '../../common/plugin-api-rpc';
 import { DirNode, OpenFileDialogProps, SaveFileDialogProps, OpenFileDialogFactory, SaveFileDialogFactory } from '@theia/filesystem/lib/browser';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 import { FileSystem, FileStat } from '@theia/filesystem/lib/common';
-import { LabelProvider } from '@theia/core/lib/browser';
 import { UriSelection } from '@theia/core/lib/common/selection';
+import { FileUploadService } from '@theia/filesystem/lib/browser/file-upload-service';
 
 export class DialogsMainImpl implements DialogsMain {
 
     private workspaceService: WorkspaceService;
     private fileSystem: FileSystem;
-    private labelProvider: LabelProvider;
 
     private openFileDialogFactory: OpenFileDialogFactory;
     private saveFileDialogFactory: SaveFileDialogFactory;
+    private uploadService: FileUploadService;
 
     constructor(rpc: RPCProtocol, container: interfaces.Container) {
         this.workspaceService = container.get(WorkspaceService);
         this.fileSystem = container.get(FileSystem);
-        this.labelProvider = container.get(LabelProvider);
 
         this.openFileDialogFactory = container.get(OpenFileDialogFactory);
         this.saveFileDialogFactory = container.get(SaveFileDialogFactory);
+        this.uploadService = container.get(FileUploadService);
     }
 
     protected async getRootUri(defaultUri: string | undefined): Promise<FileStat | undefined> {
@@ -72,10 +71,7 @@ export class DialogsMainImpl implements DialogsMain {
         }
 
         // Take the info for root node
-        const rootUri = new URI(rootStat.uri);
-        const name = this.labelProvider.getName(rootUri);
-        const icon = await this.labelProvider.getIcon(rootUri);
-        const rootNode = DirNode.createRoot(rootStat, name, icon);
+        const rootNode = DirNode.createRoot(rootStat);
 
         try {
             // Determine proper title for the dialog
@@ -130,10 +126,7 @@ export class DialogsMainImpl implements DialogsMain {
         }
 
         // Take the info for root node
-        const rootUri = new URI(rootStat.uri);
-        const name = this.labelProvider.getName(rootUri);
-        const icon = await this.labelProvider.getIcon(rootUri);
-        const rootNode = DirNode.createRoot(rootStat, name, icon);
+        const rootNode = DirNode.createRoot(rootStat);
 
         try {
             // Create save file dialog props
@@ -156,6 +149,23 @@ export class DialogsMainImpl implements DialogsMain {
             return undefined;
         } catch (error) {
             console.error(error);
+        }
+
+        return undefined;
+    }
+
+    async $showUploadDialog(options: UploadDialogOptionsMain): Promise<string[] | undefined> {
+        const rootStat = await this.getRootUri(options.defaultUri);
+
+        // Fail if root not fount
+        if (!rootStat) {
+            throw new Error('Failed to resolve base directory where files should be uploaded');
+        }
+
+        const uploadResult = await this.uploadService.upload(rootStat.uri);
+
+        if (uploadResult) {
+            return uploadResult.uploaded;
         }
 
         return undefined;

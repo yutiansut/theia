@@ -21,6 +21,7 @@ import { IJSONSchema } from '@theia/core/lib/common/json-schema';
 import URI from '@theia/core/lib/common/uri';
 import { DebugService } from '../common/debug-service';
 import { debugPreferencesSchema } from './debug-preferences';
+import { inputsSchema } from '@theia/variable-resolver/lib/browser/variable-input-schema';
 
 @injectable()
 export class DebugSchemaUpdater {
@@ -31,7 +32,6 @@ export class DebugSchemaUpdater {
 
     async update(): Promise<void> {
         const types = await this.debug.debugTypes();
-        const launchSchemaUrl = new URI('vscode://debug/launch.json');
         const schema = { ...deepClone(launchSchema) };
         const items = (<IJSONSchema>schema!.properties!['configurations'].items);
 
@@ -48,29 +48,27 @@ export class DebugSchemaUpdater {
         }
         items.defaultSnippets!.push(...await this.debug.getConfigurationSnippets());
 
+        const uri = new URI(launchSchemaId);
         const contents = JSON.stringify(schema);
         try {
-            await this.inmemoryResources.update(launchSchemaUrl, contents);
+            this.inmemoryResources.update(uri, contents);
         } catch (e) {
-            this.inmemoryResources.add(launchSchemaUrl, contents);
+            this.inmemoryResources.add(uri, contents);
             this.jsonSchemaStore.registerSchema({
                 fileMatch: ['launch.json'],
-                url: launchSchemaUrl.toString()
+                url: uri.toString()
             });
         }
     }
 }
 
-// debug general schema
-const defaultCompound = { name: 'Compound', configurations: [] };
-
-const launchSchemaId = 'vscode://schemas/launch';
+export const launchSchemaId = 'vscode://schemas/launch';
 const launchSchema: IJSONSchema = {
-    id: launchSchemaId,
+    $id: launchSchemaId,
     type: 'object',
     title: 'Launch',
     required: [],
-    default: { version: '0.2.0', configurations: [], compounds: [] },
+    default: { version: '0.2.0', configurations: [] },
     properties: {
         version: {
             type: 'string',
@@ -86,47 +84,6 @@ const launchSchema: IJSONSchema = {
                 oneOf: []
             }
         },
-        compounds: {
-            type: 'array',
-            description: 'List of compounds. Each compound references multiple configurations which will get launched together.',
-            items: {
-                type: 'object',
-                required: ['name', 'configurations'],
-                properties: {
-                    name: {
-                        type: 'string',
-                        description: 'Name of compound. Appears in the launch configuration drop down menu.'
-                    },
-                    configurations: {
-                        type: 'array',
-                        default: [],
-                        items: {
-                            oneOf: [{
-                                enum: [],
-                                description: 'Please use unique configuration names.'
-                            }, {
-                                type: 'object',
-                                required: ['name'],
-                                properties: {
-                                    name: {
-                                        enum: [],
-                                        description: 'Name of compound. Appears in the launch configuration drop down menu.'
-                                    },
-                                    folder: {
-                                        enum: [],
-                                        description: 'Name of folder in which the compound is located.'
-                                    }
-                                }
-                            }]
-                        },
-                        description: 'Names of configurations that will be started as part of this compound.'
-                    }
-                },
-                default: defaultCompound
-            },
-            default: [
-                defaultCompound
-            ]
-        }
+        inputs: inputsSchema.definitions!.inputs
     }
 };

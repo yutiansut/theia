@@ -38,7 +38,7 @@ export class QuickOpenWorkspace implements QuickOpenModel {
     async open(workspaces: string[]): Promise<void> {
         this.items = [];
         const homeStat = await this.fileSystem.getCurrentUserHome();
-        const home = (homeStat) ? new URI(homeStat.uri).withoutScheme().toString() : undefined;
+        const home = (homeStat) ? new URI(homeStat.uri).path.toString() : undefined;
         let tempWorkspaceFile: URI | undefined;
         if (home) {
             tempWorkspaceFile = getTemporaryWorkspaceFileUri(new URI(home));
@@ -60,11 +60,13 @@ export class QuickOpenWorkspace implements QuickOpenModel {
             if (tempWorkspaceFile && uri.toString() === tempWorkspaceFile.toString()) {
                 continue; // skip the temporary workspace files
             }
+            const icon = this.labelProvider.getIcon(stat);
+            const iconClass = icon === '' ? undefined : icon + ' file-icon';
             this.items.push(new QuickOpenGroupItem({
                 label: uri.path.base,
                 description: (home) ? FileSystemUtils.tildifyPath(uri.path.toString(), home) : uri.path.toString(),
                 groupLabel: `last modified ${moment(stat.lastModification).fromNow()}`,
-                iconClass: await this.labelProvider.getIcon(uri) + ' file-icon',
+                iconClass,
                 run: (mode: QuickOpenMode): boolean => {
                     if (mode !== QuickOpenMode.OPEN) {
                         return false;
@@ -90,7 +92,7 @@ export class QuickOpenWorkspace implements QuickOpenModel {
         acceptor(this.items);
     }
 
-    select() {
+    select(): void {
         this.items = [];
         this.opened = this.workspaceService.opened;
         this.workspaceService.recentWorkspaces().then(workspaceRoots => {

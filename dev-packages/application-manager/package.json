@@ -1,6 +1,6 @@
 {
   "name": "@theia/application-manager",
-  "version": "0.5.0",
+  "version": "0.14.0",
   "description": "Theia application manager API.",
   "publishConfig": {
     "access": "public"
@@ -8,12 +8,12 @@
   "license": "EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/theia-ide/theia.git"
+    "url": "https://github.com/eclipse-theia/theia.git"
   },
   "bugs": {
-    "url": "https://github.com/theia-ide/theia/issues"
+    "url": "https://github.com/eclipse-theia/theia/issues"
   },
-  "homepage": "https://github.com/theia-ide/theia",
+  "homepage": "https://github.com/eclipse-theia/theia",
   "files": [
     "lib",
     "src"
@@ -25,18 +25,21 @@
     "clean": "theiaext clean",
     "build": "theiaext build",
     "watch": "theiaext watch",
-    "test": "theiaext test",
-    "docs": "theiaext docs"
+    "test": "theiaext test"
   },
   "dependencies": {
-    "@theia/application-package": "^0.5.0",
+    "@babel/core": "^7.5.5",
+    "@babel/plugin-transform-classes": "^7.5.5",
+    "@babel/plugin-transform-runtime": "^7.5.5",
+    "@babel/preset-env": "^7.5.5",
+    "@theia/application-package": "^0.14.0",
+    "@theia/compression-webpack-plugin": "^3.0.0",
     "@types/fs-extra": "^4.0.2",
-    "bunyan": "^1.8.10",
+    "babel-loader": "^8.0.6",
     "circular-dependency-plugin": "^5.0.0",
     "copy-webpack-plugin": "^4.5.0",
     "css-loader": "^0.28.1",
-    "electron": "^2.0.14",
-    "electron-rebuild": "^1.5.11",
+    "electron-rebuild": "^1.8.6",
     "file-loader": "^1.1.11",
     "font-awesome-webpack": "0.0.5-beta.2",
     "fs-extra": "^4.0.2",
@@ -52,7 +55,7 @@
     "worker-loader": "^1.1.1"
   },
   "devDependencies": {
-    "@theia/ext-scripts": "^0.5.0"
+    "@theia/ext-scripts": "^0.14.0"
   },
   "nyc": {
     "extends": "../../configs/nyc.json"

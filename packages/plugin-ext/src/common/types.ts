@@ -13,6 +13,11 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
+// copied from https://github.com/microsoft/vscode/blob/1.37.0/src/vs/base/common/types.ts
+/*---------------------------------------------------------------------------------------------
+*  Copyright (c) Microsoft Corporation. All rights reserved.
+*  Licensed under the MIT License. See License.txt in the project root for license information.
+*--------------------------------------------------------------------------------------------*/
 
 /**
  * Returns `true` if the parameter has type "object" and not null, an array, a regexp, a date.
@@ -63,3 +68,51 @@ export interface LogPart {
 // tslint:disable-next-line:no-any
 export interface KeysToAnyValues { [key: string]: any }
 export interface KeysToKeysToAnyValue { [key: string]: KeysToAnyValues }
+
+// tslint:disable:no-any
+/** copied from https://github.com/TypeFox/vscode/blob/70b8db24a37fafc77247de7f7cb5bb0195120ed0/src/vs/workbench/api/common/extHostTypes.ts#L18-L27 */
+export function es5ClassCompat<T extends Function>(target: T): T {
+    /// @ts-ignore
+    function _(): any { return Reflect.construct(target, arguments, this.constructor); }
+    Object.defineProperty(_, 'name', Object.getOwnPropertyDescriptor(target, 'name')!);
+    Object.setPrototypeOf(_, target);
+    Object.setPrototypeOf(_.prototype, target.prototype);
+    return _ as unknown as T;
+}
+// tslint:enable:no-any
+const _typeof = {
+    number: 'number',
+    string: 'string',
+    undefined: 'undefined',
+    object: 'object',
+    function: 'function'
+};
+// tslint:disable:no-any
+/**
+ * @returns whether the provided parameter is a JavaScript Array or not.
+ */
+export function isArray(array: any): array is any[] {
+    if (Array.isArray) {
+        return Array.isArray(array);
+    }
+
+    if (array && typeof (array.length) === _typeof.number && array.constructor === Array) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * @returns whether the provided parameter is undefined.
+ */
+export function isUndefined(obj: any): obj is undefined {
+    return typeof (obj) === _typeof.undefined;
+}
+
+/**
+ * @returns whether the provided parameter is undefined or null.
+ */
+export function isUndefinedOrNull(obj: any): obj is undefined | null {
+    return isUndefined(obj) || obj === null;
+}

@@ -1,10 +1,10 @@
 {
   "name": "@theia/java-debug",
-  "version": "0.5.0",
+  "version": "0.14.0",
   "description": "Theia - Java Debug Extension",
   "dependencies": {
-    "@theia/debug": "^0.5.0",
-    "@theia/java": "^0.5.0",
+    "@theia/debug": "^0.14.0",
+    "@theia/java": "^0.14.0",
     "lodash": "^4.17.10"
   },
   "publishConfig": {
@@ -24,12 +24,12 @@
   "license": "EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/theia-ide/theia.git"
+    "url": "https://github.com/eclipse-theia/theia.git"
   },
   "bugs": {
-    "url": "https://github.com/theia-ide/theia/issues"
+    "url": "https://github.com/eclipse-theia/theia/issues"
   },
-  "homepage": "https://github.com/theia-ide/theia",
+  "homepage": "https://github.com/eclipse-theia/theia",
   "files": [
     "lib",
     "src",
@@ -41,16 +41,15 @@
     "clean": "theiaext clean",
     "build": "theiaext build",
     "watch": "theiaext watch",
-    "test": "theiaext test",
-    "docs": "theiaext docs"
+    "test": "theiaext test"
   },
   "devDependencies": {
-    "@theia/ext-scripts": "^0.5.0"
+    "@theia/ext-scripts": "^0.14.0"
   },
   "nyc": {
     "extends": "../../configs/nyc.json"
   },
   "adapters": {
-    "java-debug": "https://ms-vscode.gallery.vsassets.io/_apis/public/gallery/publisher/vscjava/extension/vscode-java-debug/0.15.0/assetbyname/Microsoft.VisualStudio.Services.VSIXPackage"
+    "java-debug": "https://github.com/microsoft/vscode-java-debug/releases/download/0.15.0/vscode-java-debug-0.15.0.vsix"
   }
 }

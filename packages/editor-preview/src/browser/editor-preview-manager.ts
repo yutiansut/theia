@@ -17,12 +17,11 @@
 import { injectable, inject, postConstruct } from 'inversify';
 import URI from '@theia/core/lib/common/uri';
 import { ApplicationShell, DockPanel } from '@theia/core/lib/browser';
-import { EditorManager,  EditorOpenerOptions, EditorWidget } from '@theia/editor/lib/browser';
+import { EditorManager, EditorOpenerOptions, EditorWidget } from '@theia/editor/lib/browser';
 import { EditorPreviewWidget } from './editor-preview-widget';
 import { EditorPreviewWidgetFactory, EditorPreviewWidgetOptions } from './editor-preview-factory';
 import { EditorPreviewPreferences } from './editor-preview-preferences';
 import { WidgetOpenHandler, WidgetOpenerOptions } from '@theia/core/lib/browser';
-import { Deferred } from '@theia/core/lib/common/promise-util';
 
 /**
  * Opener options containing an optional preview flag.
@@ -35,7 +34,7 @@ export interface PreviewEditorOpenerOptions extends EditorOpenerOptions {
  * Class for managing an editor preview widget.
  */
 @injectable()
-export class EditorPreviewManager extends WidgetOpenHandler<EditorPreviewWidget|EditorWidget> {
+export class EditorPreviewManager extends WidgetOpenHandler<EditorPreviewWidget | EditorWidget> {
 
     readonly id = EditorPreviewWidgetFactory.ID;
 
@@ -60,6 +59,16 @@ export class EditorPreviewManager extends WidgetOpenHandler<EditorPreviewWidget|
                 return this.handlePreviewWidgetCreated(widget);
             }
         });
+
+        this.preferences.onPreferenceChanged(change => {
+            if (this.currentEditorPreview) {
+                this.currentEditorPreview.then(editorPreview => {
+                    if (!change.newValue && editorPreview) {
+                        editorPreview.pinEditorWidget();
+                    }
+                });
+            }
+        });
     }
 
     protected async handlePreviewWidgetCreated(widget: EditorPreviewWidget): Promise<void> {
@@ -72,13 +81,13 @@ export class EditorPreviewManager extends WidgetOpenHandler<EditorPreviewWidget|
         this.currentEditorPreview = Promise.resolve(widget);
         widget.disposed.connect(() => this.currentEditorPreview = Promise.resolve(undefined));
 
-        widget.onPinned(({preview, editorWidget}) => {
+        widget.onPinned(({ preview, editorWidget }) => {
             // TODO(caseyflynn): I don't believe there is ever a case where
             // this will not hold true.
             if (preview.parent && preview.parent instanceof DockPanel) {
-                preview.parent.addWidget(editorWidget, {ref: preview});
+                preview.parent.addWidget(editorWidget, { ref: preview });
             } else {
-                this.shell.addWidget(editorWidget, {area: 'main'});
+                this.shell.addWidget(editorWidget, { area: 'main' });
             }
             preview.dispose();
             this.shell.activateWidget(editorWidget.id);
@@ -99,38 +108,40 @@ export class EditorPreviewManager extends WidgetOpenHandler<EditorPreviewWidget|
         return 0;
     }
 
-    async open(uri: URI, options?: PreviewEditorOpenerOptions): Promise<EditorPreviewWidget | EditorWidget> {
-        options = {...options, mode: 'open'};
-
-        const deferred = new Deferred<EditorPreviewWidget | undefined>();
-        const previousPreview = await this.currentEditorPreview;
-        this.currentEditorPreview = deferred.promise;
-
-        if (await this.editorManager.getByUri(uri)) {
-            let widget: EditorWidget | EditorPreviewWidget = await this.editorManager.open(uri, options);
-            if (widget.parent instanceof EditorPreviewWidget) {
-                if (!options.preview) {
-                    widget.parent.pinEditorWidget();
-                }
-                widget = widget.parent;
-            }
-            this.shell.revealWidget(widget.id);
-            deferred.resolve(previousPreview);
+    async open(uri: URI, options: PreviewEditorOpenerOptions = {}): Promise<EditorPreviewWidget | EditorWidget> {
+        let widget = await this.pinCurrentEditor(uri, options);
+        if (widget) {
             return widget;
         }
+        widget = await this.replaceCurrentPreview(uri, options) || await this.openNewPreview(uri, options);
+        await this.editorManager.open(uri, options);
+        return widget;
+    }
 
-        if (!previousPreview) {
-            this.currentEditorPreview = super.open(uri, options) as Promise<EditorPreviewWidget>;
-        } else {
-            const childWidget = await this.editorManager.getOrCreateByUri(uri);
-            previousPreview.replaceEditorWidget(childWidget);
-            this.currentEditorPreview = Promise.resolve(previousPreview);
+    protected async pinCurrentEditor(uri: URI, options: PreviewEditorOpenerOptions): Promise<EditorWidget | EditorPreviewWidget | undefined> {
+        if (await this.editorManager.getByUri(uri)) {
+            const editorWidget = await this.editorManager.open(uri, options);
+            if (editorWidget.parent instanceof EditorPreviewWidget) {
+                if (!options.preview) {
+                    editorWidget.parent.pinEditorWidget();
+                }
+                return editorWidget.parent;
+            }
+            return editorWidget;
         }
+    }
 
-        const preview = await this.currentEditorPreview as EditorPreviewWidget;
-        this.editorManager.open(uri, options);
-        this.shell.revealWidget(preview.id);
-        return preview;
+    protected async replaceCurrentPreview(uri: URI, options: PreviewEditorOpenerOptions): Promise<EditorPreviewWidget | undefined> {
+        const currentPreview = await this.currentEditorPreview;
+        if (currentPreview) {
+            const editorWidget = await this.editorManager.getOrCreateByUri(uri);
+            currentPreview.replaceEditorWidget(editorWidget);
+            return currentPreview;
+        }
+    }
+
+    protected openNewPreview(uri: URI, options: PreviewEditorOpenerOptions): Promise<EditorPreviewWidget> {
+        return this.currentEditorPreview = super.open(uri, options) as Promise<EditorPreviewWidget>;
     }
 
     protected createWidgetOptions(uri: URI, options?: WidgetOpenerOptions): EditorPreviewWidgetOptions {

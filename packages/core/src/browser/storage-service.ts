@@ -18,6 +18,7 @@ import { inject, injectable, postConstruct } from 'inversify';
 import { ILogger } from '../common/logger';
 import { MessageService } from '../common/message-service';
 import { WindowService } from './window/window-service';
+import { environment } from '@theia/application-package/lib/environment';
 
 export const StorageService = Symbol('IStorageService');
 /**
@@ -51,7 +52,7 @@ export class LocalStorageService implements StorageService {
     @inject(WindowService) protected readonly windowService: WindowService;
 
     @postConstruct()
-    protected init() {
+    protected init(): void {
         if (typeof window !== 'undefined' && window.localStorage) {
             this.storage = window.localStorage;
             this.testLocalStorage();
@@ -83,6 +84,9 @@ export class LocalStorageService implements StorageService {
     }
 
     protected prefix(key: string): string {
+        if (environment.electron.is()) {
+            return `theia:${key}`;
+        }
         const pathname = typeof window === 'undefined' ? '' : window.location.pathname;
         return `theia:${pathname}:${key}`;
     }
@@ -96,7 +100,7 @@ export class LocalStorageService implements StorageService {
         your browser's local storage or choose to clear all.`;
         this.messageService.warn(ERROR_MESSAGE, READ_INSTRUCTIONS_ACTION, CLEAR_STORAGE_ACTION).then(async selected => {
             if (READ_INSTRUCTIONS_ACTION === selected) {
-                this.windowService.openNewWindow('https://github.com/theia-ide/theia/wiki/Cleaning-Local-Storage', { external: true });
+                this.windowService.openNewWindow('https://github.com/eclipse-theia/theia/wiki/Cleaning-Local-Storage', { external: true });
             } else if (CLEAR_STORAGE_ACTION === selected) {
                 this.clearStorage();
             }

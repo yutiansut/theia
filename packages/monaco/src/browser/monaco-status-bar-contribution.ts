@@ -60,7 +60,7 @@ export class MonacoStatusBarContribution implements FrontendApplicationContribut
         }
     }
 
-    protected setConfigTabSizeWidget() {
+    protected setConfigTabSizeWidget(): void {
         const editor = this.editorManager.currentEditor;
         const editorModel = this.getModel(editor);
         if (editor && editorModel) {
@@ -71,15 +71,16 @@ export class MonacoStatusBarContribution implements FrontendApplicationContribut
                 text: `${useSpaceOrTab}: ${tabSize}`,
                 alignment: StatusBarAlignment.RIGHT,
                 priority: 10,
-                command: EditorCommands.CONFIG_INDENTATION.id
+                command: EditorCommands.CONFIG_INDENTATION.id,
+                tooltip: 'Select Indentation'
             });
         }
     }
-    protected removeConfigTabSizeWidget() {
+    protected removeConfigTabSizeWidget(): void {
         this.statusBar.removeElement('editor-status-tabbing-config');
     }
 
-    protected setLineEndingWidget() {
+    protected setLineEndingWidget(): void {
         const editor = this.editorManager.currentEditor;
         const editorModel = this.getModel(editor);
         if (editor && editorModel) {
@@ -89,16 +90,17 @@ export class MonacoStatusBarContribution implements FrontendApplicationContribut
                 text: `${text}`,
                 alignment: StatusBarAlignment.RIGHT,
                 priority: 11,
-                command: EditorCommands.CONFIG_EOL.id
+                command: EditorCommands.CONFIG_EOL.id,
+                tooltip: 'Select End Of Line Sequence'
             });
         }
     }
-    protected removeLineEndingWidget() {
+    protected removeLineEndingWidget(): void {
         this.statusBar.removeElement('editor-status-eol');
     }
 
     protected getModel(editor: EditorWidget | undefined): monaco.editor.IModel | undefined {
         const monacoEditor = MonacoEditor.get(editor);
-        return monacoEditor && monacoEditor.getControl().getModel();
+        return monacoEditor && monacoEditor.getControl().getModel() || undefined;
     }
 }

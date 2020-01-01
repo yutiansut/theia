@@ -17,7 +17,7 @@
 import { Widget } from '@phosphor/widgets';
 import { Message } from '@phosphor/messaging';
 import { Event, MaybePromise } from '../common';
-import { Key } from './keys';
+import { Key } from './keyboard/keys';
 import { AbstractDialog } from './dialogs';
 
 export interface Saveable {
@@ -169,7 +169,7 @@ export class ShouldSaveDialog extends AbstractDialog<boolean> {
         this.appendAcceptButton('Save');
     }
 
-    protected appendDontSaveButton() {
+    protected appendDontSaveButton(): HTMLButtonElement {
         const button = this.createButton("Don't save");
         this.controlPanel.appendChild(button);
         button.classList.add('secondary');

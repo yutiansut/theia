@@ -16,16 +16,16 @@
 
 // tslint:disable:no-any
 import URI from '@theia/core/lib/common/uri';
-import { EditorPreferenceChange, EditorPreferences, TextEditor, DiffNavigator, EndOfLinePreference } from '@theia/editor/lib/browser';
+import { EditorPreferenceChange, EditorPreferences, TextEditor, DiffNavigator } from '@theia/editor/lib/browser';
 import { DiffUris } from '@theia/core/lib/browser/diff-uris';
 import { inject, injectable } from 'inversify';
-import { DisposableCollection } from '@theia/core/lib/common';
+import { DisposableCollection, deepClone, Disposable, } from '@theia/core/lib/common';
 import { MonacoToProtocolConverter, ProtocolToMonacoConverter, TextDocumentSaveReason } from 'monaco-languageclient';
 import { MonacoCommandServiceFactory } from './monaco-command-service';
 import { MonacoContextMenuService } from './monaco-context-menu';
 import { MonacoDiffEditor } from './monaco-diff-editor';
 import { MonacoDiffNavigatorFactory } from './monaco-diff-navigator-factory';
-import { MonacoEditor } from './monaco-editor';
+import { MonacoEditor, MonacoEditorServices } from './monaco-editor';
 import { MonacoEditorModel, WillSaveMonacoModelEvent } from './monaco-editor-model';
 import { MonacoEditorService } from './monaco-editor-service';
 import { MonacoQuickOpenService } from './monaco-quick-open-service';
@@ -43,8 +43,20 @@ export class MonacoEditorProvider {
     @inject(MonacoBulkEditService)
     protected readonly bulkEditService: MonacoBulkEditService;
 
-    private isWindowsBackend = false;
-    private hookedConfigService: any = undefined;
+    @inject(MonacoEditorServices)
+    protected readonly services: MonacoEditorServices;
+
+    private isWindowsBackend: boolean = false;
+
+    protected _current: MonacoEditor | undefined;
+    /**
+     * Returns the last focused MonacoEditor.
+     * It takes into account inline editors as well.
+     * If you are interested only in standalone editors then use `MonacoEditor.getCurrent(EditorManager)`
+     */
+    get current(): MonacoEditor | undefined {
+        return this._current;
+    }
 
     constructor(
         @inject(MonacoEditorService) protected readonly codeEditorService: MonacoEditorService,
@@ -60,39 +72,30 @@ export class MonacoEditorProvider {
         @inject(ApplicationServer) protected readonly applicationServer: ApplicationServer,
         @inject(monaco.contextKeyService.ContextKeyService) protected readonly contextKeyService: monaco.contextKeyService.ContextKeyService
     ) {
-        const init = monaco.services.StaticServices.init.bind(monaco.services.StaticServices);
+        const staticServices = monaco.services.StaticServices;
+        const init = staticServices.init.bind(monaco.services.StaticServices);
         this.applicationServer.getBackendOS().then(os => {
             this.isWindowsBackend = os === OS.Type.Windows;
         });
+
+        if (staticServices.resourcePropertiesService) {
+            // tslint:disable-next-line:no-any
+            const original = staticServices.resourcePropertiesService.get() as any;
+            original.getEOL = () => {
+                const eol = this.editorPreferences['files.eol'];
+                if (eol) {
+                    if (eol !== 'auto') {
+                        return eol;
+                    }
+                }
+                return this.isWindowsBackend ? '\r\n' : '\n';
+            };
+        }
         monaco.services.StaticServices.init = o => {
             const result = init(o);
             result[0].set(monaco.services.ICodeEditorService, codeEditorService);
-            if (!this.hookedConfigService) {
-                this.hookedConfigService = result[0].get(monaco.services.IConfigurationService);
-                const originalGetValue = this.hookedConfigService.getValue.bind(this.hookedConfigService);
-                this.hookedConfigService.getValue = (arg1: any, arg2: any) => {
-                    const creationOptions = originalGetValue(arg1, arg2);
-                    if (typeof creationOptions === 'object') {
-                        const eol = this.getEOL();
-                        creationOptions.files = {
-                            eol
-                        };
-                    }
-                    return creationOptions;
-                };
-            }
             return result;
         };
-    }
-
-    protected getEOL(): EndOfLinePreference {
-        const eol = this.editorPreferences['files.eol'];
-        if (eol) {
-            if (eol !== 'auto') {
-                return eol;
-            }
-        }
-        return this.isWindowsBackend ? '\r\n' : '\n';
     }
 
     protected async getModel(uri: URI, toDispose: DisposableCollection): Promise<MonacoEditorModel> {
@@ -126,6 +129,18 @@ export class MonacoEditorProvider {
         commandService.setDelegate(standaloneCommandService);
         this.installQuickOpenService(editor);
         this.installReferencesController(editor);
+
+        toDispose.push(editor.onFocusChanged(focused => {
+            if (focused) {
+                this._current = editor;
+            }
+        }));
+        toDispose.push(Disposable.create(() => {
+            if (this._current === editor) {
+                this._current = undefined;
+            }
+        }));
+
         return editor;
     }
 
@@ -142,7 +157,7 @@ export class MonacoEditorProvider {
     protected async createMonacoEditor(uri: URI, override: IEditorOverrideServices, toDispose: DisposableCollection): Promise<MonacoEditor> {
         const model = await this.getModel(uri, toDispose);
         const options = this.createMonacoEditorOptions(model);
-        const editor = new MonacoEditor(uri, model, document.createElement('div'), this.m2p, this.p2m, options, override);
+        const editor = new MonacoEditor(uri, model, document.createElement('div'), this.services, options, override);
         toDispose.push(this.editorPreferences.onPreferenceChanged(event => {
             if (event.affects(uri.toString(), model.languageId)) {
                 this.updateMonacoEditorOptions(editor, event);
@@ -184,7 +199,7 @@ export class MonacoEditorProvider {
         const formatOnSaveTimeout = this.editorPreferences.get({ preferenceName: 'editor.formatOnSaveTimeout', overrideIdentifier }, undefined, uri)!;
         await Promise.race([
             new Promise(reject => setTimeout(() => reject(new Error(`Aborted format on save after ${formatOnSaveTimeout}ms`)), formatOnSaveTimeout)),
-            await editor.commandService.executeCommand('monaco.editor.action.formatDocument')
+            await editor.commandService.executeCommand('editor.action.formatDocument')
         ]);
         return [];
     }
@@ -202,7 +217,7 @@ export class MonacoEditorProvider {
             uri,
             document.createElement('div'),
             originalModel, modifiedModel,
-            this.m2p, this.p2m,
+            this.services,
             this.diffNavigatorFactory,
             options,
             override);
@@ -239,11 +254,13 @@ export class MonacoEditorProvider {
     protected createOptions(prefixes: string[], uri: string, overrideIdentifier?: string): { [name: string]: any } {
         return Object.keys(this.editorPreferences).reduce((options, preferenceName) => {
             const value = (<any>this.editorPreferences).get({ preferenceName, overrideIdentifier }, undefined, uri);
-            return this.setOption(preferenceName, value, prefixes, options);
+            return this.setOption(preferenceName, deepClone(value), prefixes, options);
         }, {});
     }
 
-    protected setOption(preferenceName: string, value: any, prefixes: string[], options: { [name: string]: any } = {}) {
+    protected setOption(preferenceName: string, value: any, prefixes: string[], options: { [name: string]: any } = {}): {
+        [name: string]: any;
+    } {
         const optionName = this.toOptionName(preferenceName, prefixes);
         this.doSetOption(options, value, optionName.split('.'));
         return options;
@@ -297,18 +314,22 @@ export class MonacoEditorProvider {
             referencesController._ignoreModelChangeEvent = true;
             const range = monaco.Range.lift(ref.range).collapseToStart();
 
+            // prerse the model that it does not get disposed if an editor preview replaces an editor
+            const model = referencesController._model;
+            referencesController._model = undefined;
+
             referencesController._editorService.openCodeEditor({
                 resource: ref.uri,
                 options: { selection: range }
-            }, control).done(openedEditor => {
+            }, control).then(openedEditor => {
+                referencesController._model = model;
                 referencesController._ignoreModelChangeEvent = false;
                 if (!openedEditor) {
                     referencesController.closeWidget();
                     return;
                 }
                 if (openedEditor !== control) {
-                    const model = referencesController._model;
-                    // to preserve the references model
+                    // preserve the model that it does not get disposed in `referencesController.closeWidget`
                     referencesController._model = undefined;
 
                     // to preserve the active editor
@@ -325,12 +346,14 @@ export class MonacoEditorProvider {
                     return;
                 }
 
-                referencesController._widget.show(range);
-                referencesController._widget.focus();
+                if (referencesController._widget) {
+                    referencesController._widget.show(range);
+                    referencesController._widget.focus();
+                }
 
             }, (e: any) => {
                 referencesController._ignoreModelChangeEvent = false;
-                throw e;
+                monaco.error.onUnexpectedError(e);
             });
         };
     }
@@ -358,8 +381,7 @@ export class MonacoEditorProvider {
                 uri,
                 document,
                 node,
-                this.m2p,
-                this.p2m,
+                this.services,
                 Object.assign({
                     model,
                     isSimpleWidget: true,

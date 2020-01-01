@@ -14,28 +14,23 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 import { Emitter } from '@theia/core/lib/common/event';
-import { Disposable } from '../../types-impl';
-import { Breakpoint } from '../../../api/model';
-import { RPCProtocol } from '../../../api/rpc-protocol';
-import {
-    PLUGIN_RPC_CONTEXT as Ext,
-    DebugMain,
-    DebugExt,
-    TerminalOptionsExt
-} from '../../../api/plugin-api';
-import * as theia from '@theia/plugin';
-import uuid = require('uuid');
-import { ConnectionExtImpl } from '../../connection-ext';
-import { CommandRegistryImpl } from '../../command-registry';
-import { DebuggerContribution } from '../../../common';
-import { PluginWebSocketChannel } from '../../../common/connection';
-import { DebugAdapterExecutable, CommunicationProvider } from '@theia/debug/lib/common/debug-model';
-import { IJSONSchema, IJSONSchemaSnippet } from '@theia/core/lib/common/json-schema';
-import { PluginDebugAdapterSession } from './plugin-debug-adapter-session';
-import { startDebugAdapter, connectDebugAdapter } from './plugin-debug-adapter-starter';
-import { resolveDebugAdapterExecutable } from './plugin-debug-adapter-executable-resolver';
-import URI from 'vscode-uri';
 import { Path } from '@theia/core/lib/common/path';
+import { CommunicationProvider } from '@theia/debug/lib/common/debug-model';
+import * as theia from '@theia/plugin';
+import URI from 'vscode-uri';
+import { Breakpoint } from '../../../common/plugin-api-rpc-model';
+import { DebugExt, DebugMain, PLUGIN_RPC_CONTEXT as Ext, TerminalOptionsExt } from '../../../common/plugin-api-rpc';
+import { PluginPackageDebuggersContribution } from '../../../common/plugin-protocol';
+import { RPCProtocol } from '../../../common/rpc-protocol';
+import { PluginWebSocketChannel } from '../../../common/connection';
+import { CommandRegistryImpl } from '../../command-registry';
+import { ConnectionExtImpl } from '../../connection-ext';
+import { Disposable } from '../../types-impl';
+import { resolveDebugAdapterExecutable } from './plugin-debug-adapter-executable-resolver';
+import { PluginDebugAdapterSession } from './plugin-debug-adapter-session';
+import { connectDebugAdapter, startDebugAdapter } from './plugin-debug-adapter-starter';
+import { PluginDebugAdapterTracker } from './plugin-debug-adapter-tracker';
+import uuid = require('uuid');
 
 // tslint:disable:no-any
 
@@ -50,7 +45,13 @@ export class DebugExtImpl implements DebugExt {
 
     // providers by type
     private configurationProviders = new Map<string, Set<theia.DebugConfigurationProvider>>();
-    private debuggersContributions = new Map<string, DebuggerContribution>();
+    /**
+     * Only use internally, don't send it to the frontend. It's expensive!
+     * It's already there as a part of the plugin metadata.
+     */
+    private debuggersContributions = new Map<string, PluginPackageDebuggersContribution>();
+    private descriptorFactories = new Map<string, theia.DebugAdapterDescriptorFactory>();
+    private trackerFactories: [string, theia.DebugAdapterTrackerFactory][] = [];
     private contributionPaths = new Map<string, string>();
 
     private connectionExt: ConnectionExtImpl;
@@ -79,7 +80,7 @@ export class DebugExtImpl implements DebugExt {
     /**
      * Sets dependencies.
      */
-    assistedInject(connectionExt: ConnectionExtImpl, commandRegistryExt: CommandRegistryImpl) {
+    assistedInject(connectionExt: ConnectionExtImpl, commandRegistryExt: CommandRegistryImpl): void {
         this.connectionExt = connectionExt;
         this.commandRegistryExt = commandRegistryExt;
     }
@@ -89,8 +90,8 @@ export class DebugExtImpl implements DebugExt {
      * @param pluginFolder plugin folder path
      * @param contributions available debuggers contributions
      */
-    registerDebuggersContributions(pluginFolder: string, contributions: DebuggerContribution[]): void {
-        contributions.forEach((contribution: DebuggerContribution) => {
+    registerDebuggersContributions(pluginFolder: string, contributions: PluginPackageDebuggersContribution[]): void {
+        contributions.forEach(contribution => {
             this.contributionPaths.set(contribution.type, pluginFolder);
             this.debuggersContributions.set(contribution.type, contribution);
             this.proxy.$registerDebuggerContribution({
@@ -131,6 +132,25 @@ export class DebugExtImpl implements DebugExt {
 
     startDebugging(folder: theia.WorkspaceFolder | undefined, nameOrConfiguration: string | theia.DebugConfiguration): PromiseLike<boolean> {
         return this.proxy.$startDebugging(folder, nameOrConfiguration);
+    }
+
+    registerDebugAdapterDescriptorFactory(debugType: string, factory: theia.DebugAdapterDescriptorFactory): Disposable {
+        if (this.descriptorFactories.has(debugType)) {
+            throw new Error(`Descriptor factory for ${debugType} has been already registered`);
+        }
+        this.descriptorFactories.set(debugType, factory);
+        return Disposable.create(() => this.descriptorFactories.delete(debugType));
+    }
+
+    registerDebugAdapterTrackerFactory(debugType: string, factory: theia.DebugAdapterTrackerFactory): Disposable {
+        if (!factory) {
+            return Disposable.create(() => { });
+        }
+
+        this.trackerFactories.push([debugType, factory]);
+        return Disposable.create(() => {
+            this.trackerFactories = this.trackerFactories.filter(tuple => tuple[1] !== factory);
+        });
     }
 
     registerDebugConfigurationProvider(debugType: string, provider: theia.DebugConfigurationProvider): Disposable {
@@ -183,20 +203,20 @@ export class DebugExtImpl implements DebugExt {
     }
 
     async $createDebugSession(debugConfiguration: theia.DebugConfiguration): Promise<string> {
-        let communicationProvider: CommunicationProvider;
-        if ('debugServer' in debugConfiguration) {
-            communicationProvider = connectDebugAdapter(debugConfiguration.debugServer);
-        } else {
-            const executable = await this.getExecutable(debugConfiguration);
-            communicationProvider = startDebugAdapter(executable);
-        }
         const sessionId = uuid.v4();
 
-        const debugAdapterSession = new PluginDebugAdapterSession(
-            sessionId,
-            debugConfiguration,
-            communicationProvider,
-            (command: string, args?: any) => this.proxy.$customRequest(sessionId, command, args));
+        const theiaSession: theia.DebugSession = {
+            id: sessionId,
+            type: debugConfiguration.type,
+            name: debugConfiguration.name,
+            configuration: debugConfiguration,
+            customRequest: (command: string, args?: any) => this.proxy.$customRequest(sessionId, command, args)
+        };
+
+        const tracker = await this.createDebugAdapterTracker(theiaSession);
+        const communicationProvider = await this.createCommunicationProvider(theiaSession, debugConfiguration);
+
+        const debugAdapterSession = new PluginDebugAdapterSession(communicationProvider, tracker, theiaSession);
         this.sessions.set(sessionId, debugAdapterSession);
 
         const connection = await this.connectionExt!.ensureConnection(sessionId);
@@ -211,21 +231,6 @@ export class DebugExtImpl implements DebugExt {
             await debugAdapterSession.stop();
             this.sessions.delete(sessionId);
         }
-    }
-
-    async $getSupportedLanguages(debugType: string): Promise<string[]> {
-        const contribution = this.debuggersContributions.get(debugType);
-        return contribution && contribution.languages || [];
-    }
-
-    async $getSchemaAttributes(debugType: string): Promise<IJSONSchema[]> {
-        const contribution = this.debuggersContributions.get(debugType);
-        return contribution && contribution.configurationAttributes || [];
-    }
-
-    async $getConfigurationSnippets(debugType: string): Promise<IJSONSchemaSnippet[]> {
-        const contribution = this.debuggersContributions.get(debugType);
-        return contribution && contribution.configurationSnippets || [];
     }
 
     async $getTerminalCreationOptions(debugType: string): Promise<TerminalOptionsExt | undefined> {
@@ -254,19 +259,20 @@ export class DebugExtImpl implements DebugExt {
     async $resolveDebugConfigurations(debugConfiguration: theia.DebugConfiguration, workspaceFolderUri: string | undefined): Promise<theia.DebugConfiguration | undefined> {
         let current = debugConfiguration;
 
-        const providers = this.configurationProviders.get(debugConfiguration.type);
-        if (providers) {
-            for (const provider of providers) {
-                if (provider.resolveDebugConfiguration) {
-                    try {
-                        const next = await provider.resolveDebugConfiguration(this.toWorkspaceFolder(workspaceFolderUri), current);
-                        if (next) {
-                            current = next;
-                        } else {
-                            return current;
+        for (const providers of [this.configurationProviders.get(debugConfiguration.type), this.configurationProviders.get('*')]) {
+            if (providers) {
+                for (const provider of providers) {
+                    if (provider.resolveDebugConfiguration) {
+                        try {
+                            const next = await provider.resolveDebugConfiguration(this.toWorkspaceFolder(workspaceFolderUri), current);
+                            if (next) {
+                                current = next;
+                            } else {
+                                return current;
+                            }
+                        } catch (e) {
+                            console.error(e);
                         }
-                    } catch (e) {
-                        console.error(e);
                     }
                 }
             }
@@ -275,12 +281,54 @@ export class DebugExtImpl implements DebugExt {
         return current;
     }
 
-    private async getExecutable(debugConfiguration: theia.DebugConfiguration): Promise<DebugAdapterExecutable> {
+    protected async createDebugAdapterTracker(session: theia.DebugSession): Promise<theia.DebugAdapterTracker> {
+        return PluginDebugAdapterTracker.create(session, this.trackerFactories);
+    }
+
+    protected async createCommunicationProvider(session: theia.DebugSession, debugConfiguration: theia.DebugConfiguration): Promise<CommunicationProvider> {
+        const executable = await this.resolveDebugAdapterExecutable(debugConfiguration);
+        const descriptorFactory = this.descriptorFactories.get(session.type);
+        if (descriptorFactory) {
+            // 'createDebugAdapterDescriptor' is called at the start of a debug session to provide details about the debug adapter to use.
+            // These details must be returned as objects of type [DebugAdapterDescriptor](#DebugAdapterDescriptor).
+            // Currently two types of debug adapters are supported:
+            // - a debug adapter executable is specified as a command path and arguments (see [DebugAdapterExecutable](#DebugAdapterExecutable)),
+            // - a debug adapter server reachable via a communication port (see [DebugAdapterServer](#DebugAdapterServer)).
+            // If the method is not implemented the default behavior is this:
+            //   createDebugAdapter(session: DebugSession, executable: DebugAdapterExecutable) {
+            //      if (typeof session.configuration.debugServer === 'number') {
+            //         return new DebugAdapterServer(session.configuration.debugServer);
+            //      }
+            //      return executable;
+            //   }
+            //  @param session The [debug session](#DebugSession) for which the debug adapter will be used.
+            //  @param executable The debug adapter's executable information as specified in the package.json (or undefined if no such information exists).
+            const descriptor = await descriptorFactory.createDebugAdapterDescriptor(session, executable);
+            if (descriptor) {
+                if ('port' in descriptor) {
+                    return connectDebugAdapter(descriptor);
+                } else {
+                    return startDebugAdapter(descriptor);
+                }
+            }
+        }
+
+        if ('debugServer' in debugConfiguration) {
+            return connectDebugAdapter({ port: debugConfiguration.debugServer });
+        } else {
+            if (!executable) {
+                throw new Error('It is not possible to provide debug adapter executable.');
+            }
+            return startDebugAdapter(executable);
+        }
+    }
+
+    protected async resolveDebugAdapterExecutable(debugConfiguration: theia.DebugConfiguration): Promise<theia.DebugAdapterExecutable | undefined> {
         const { type } = debugConfiguration;
         const contribution = this.debuggersContributions.get(type);
         if (contribution) {
             if (contribution.adapterExecutableCommand) {
-                const executable = await this.commandRegistryExt.executeCommand<DebugAdapterExecutable>(contribution.adapterExecutableCommand);
+                const executable = await this.commandRegistryExt.executeCommand<theia.DebugAdapterExecutable>(contribution.adapterExecutableCommand);
                 if (executable) {
                     return executable;
                 }

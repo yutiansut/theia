@@ -14,7 +14,6 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import * as cluster from 'cluster';
 import { ContainerModule, interfaces } from 'inversify';
 import { ConnectionHandler, JsonRpcConnectionHandler, ILogger } from '@theia/core/lib/common';
 import { FileSystemNode } from './node-filesystem';
@@ -22,6 +21,10 @@ import { FileSystem, FileSystemClient, fileSystemPath, DispatchingFileSystemClie
 import { FileSystemWatcherServer, FileSystemWatcherClient, fileSystemWatcherPath } from '../common/filesystem-watcher-protocol';
 import { FileSystemWatcherServerClient } from './filesystem-watcher-client';
 import { NsfwFileSystemWatcherServer } from './nsfw-watcher/nsfw-filesystem-watcher';
+import { MessagingService } from '@theia/core/lib/node/messaging/messaging-service';
+import { NodeFileUploadService } from './node-file-upload-service';
+
+const SINGLE_THREADED = process.argv.indexOf('--no-cluster') !== -1;
 
 export function bindFileSystem(bind: interfaces.Bind, props?: {
     onFileSystemActivation: (context: interfaces.Context, fs: FileSystem) => void
@@ -35,8 +38,8 @@ export function bindFileSystem(bind: interfaces.Bind, props?: {
     bind(FileSystem).toService(FileSystemNode);
 }
 
-export function bindFileSystemWatcherServer(bind: interfaces.Bind): void {
-    if (cluster.isMaster) {
+export function bindFileSystemWatcherServer(bind: interfaces.Bind, { singleThreaded }: { singleThreaded: boolean } = { singleThreaded: SINGLE_THREADED }): void {
+    if (singleThreaded) {
         bind(FileSystemWatcherServer).toDynamicValue(ctx => {
             const logger = ctx.container.get<ILogger>(ILogger);
             return new NsfwFileSystemWatcherServer({
@@ -78,4 +81,7 @@ export default new ContainerModule(bind => {
             return server;
         })
     ).inSingletonScope();
+
+    bind(NodeFileUploadService).toSelf().inSingletonScope();
+    bind(MessagingService.Contribution).toService(NodeFileUploadService);
 });

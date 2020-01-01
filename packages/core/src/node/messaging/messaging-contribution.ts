@@ -84,7 +84,10 @@ export class MessagingContribution implements BackendApplicationContribution, Me
     onStart(server: http.Server | https.Server): void {
         const wss = new ws.Server({
             server,
-            perMessageDeflate: false
+            perMessageDeflate: {
+                // don't compress if a message is less than 256kb
+                threshold: 256 * 1024
+            }
         });
         interface CheckAliveWS extends ws {
             alive: boolean;
@@ -124,8 +127,12 @@ export class MessagingContribution implements BackendApplicationContribution, Me
                     const channel = this.createChannel(id, socket);
                     if (channelHandlers.route(path, channel)) {
                         channel.ready();
+                        console.debug(`Opening channel for service path '${path}'. [ID: ${id}]`);
                         channels.set(id, channel);
-                        channel.onClose(() => channels.delete(id));
+                        channel.onClose(() => {
+                            console.debug(`Closing channel on service path '${path}'. [ID: ${id}]`);
+                            channels.delete(id);
+                        });
                     } else {
                         console.error('Cannot find a service for the path: ' + path);
                     }

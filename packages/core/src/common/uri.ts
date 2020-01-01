@@ -14,8 +14,12 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+import { setUriThrowOnMissingScheme } from 'vscode-uri';
 import Uri from 'vscode-uri';
 import { Path } from './path';
+
+// TODO: disable it because of #4487
+setUriThrowOnMissingScheme(false);
 
 export default class URI {
 
@@ -30,6 +34,11 @@ export default class URI {
         }
     }
 
+    /**
+     * TODO move implementation to `DefaultUriLabelProviderContribution.getName`
+     *
+     * @deprecated use `LabelProvider.getName` instead
+     */
     get displayName(): string {
         const base = this.path.base;
         if (base) {
@@ -47,7 +56,7 @@ export default class URI {
     get allLocations(): URI[] {
         const locations = [];
         let location: URI = this;
-        while (!location.path.isRoot) {
+        while (!location.path.isRoot && location.path.hasDir) {
             locations.push(location);
             location = location.parent;
         }
@@ -82,13 +91,6 @@ export default class URI {
             scheme
         });
         return new URI(newCodeUri);
-    }
-
-    /**
-     * return this URI without a scheme
-     */
-    withoutScheme(): URI {
-        return this.withScheme('');
     }
 
     /**
@@ -167,6 +169,13 @@ export default class URI {
         return this.withFragment('');
     }
 
+    /**
+     * return a new URI replacing the current with its normalized path, resolving '..' and '.' segments
+     */
+    normalizePath(): URI {
+        return this.withPath(this.path.normalize());
+    }
+
     get scheme(): string {
         return this.codeUri.scheme;
     }
@@ -190,7 +199,7 @@ export default class URI {
         return this.codeUri.fragment;
     }
 
-    toString(skipEncoding?: boolean) {
+    toString(skipEncoding?: boolean): string {
         return this.codeUri.toString(skipEncoding);
     }
 

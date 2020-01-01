@@ -20,20 +20,23 @@ import { CompletionList, Range, SnippetString } from '../types-impl';
 import { DocumentsExtImpl } from '../documents';
 import * as Converter from '../type-converters';
 import { mixin } from '../../common/types';
-import { Position } from '../../api/plugin-api';
-import { CompletionContext, CompletionResultDto, Completion, CompletionDto } from '../../api/model';
-import { createToken } from '../token-provider';
+import { Position } from '../../common/plugin-api-rpc';
+import { CompletionContext, CompletionResultDto, Completion, CompletionDto, CompletionItemInsertTextRule } from '../../common/plugin-api-rpc-model';
+import { CommandRegistryImpl } from '../command-registry';
+import { DisposableCollection } from '@theia/core/lib/common/disposable';
 
 export class CompletionAdapter {
     private cacheId = 0;
-    private cache = new Map<number, theia.CompletionItem[]>();
+    private readonly cache = new Map<number, theia.CompletionItem[]>();
+    private readonly disposables = new Map<number, DisposableCollection>();
 
-    constructor(private readonly delegate: theia.CompletionItemProvider,
-        private readonly documents: DocumentsExtImpl) {
+    constructor(
+        private readonly delegate: theia.CompletionItemProvider,
+        private readonly documents: DocumentsExtImpl,
+        private readonly commands: CommandRegistryImpl
+    ) { }
 
-    }
-
-    provideCompletionItems(resource: URI, position: Position, context: CompletionContext): Promise<CompletionResultDto | undefined> {
+    provideCompletionItems(resource: URI, position: Position, context: CompletionContext, token: theia.CancellationToken): Promise<CompletionResultDto | undefined> {
         const document = this.documents.getDocumentData(resource);
         if (!document) {
             return Promise.reject(new Error(`There are no document for  ${resource}`));
@@ -42,8 +45,12 @@ export class CompletionAdapter {
         const doc = document.document;
 
         const pos = Converter.toPosition(position);
-        return Promise.resolve(this.delegate.provideCompletionItems(doc, pos, createToken(), context)).then(value => {
+        return Promise.resolve(this.delegate.provideCompletionItems(doc, pos, token, context)).then(value => {
             const id = this.cacheId++;
+
+            const toDispose = new DisposableCollection();
+            this.disposables.set(id, toDispose);
+
             const result: CompletionResultDto = {
                 id,
                 completions: [],
@@ -74,8 +81,7 @@ export class CompletionAdapter {
         });
     }
 
-    resolveCompletionItem(resource: URI, position: Position, completion: Completion): Promise<Completion> {
-
+    resolveCompletionItem(resource: URI, position: Position, completion: Completion, token: theia.CancellationToken): Promise<Completion> {
         if (typeof this.delegate.resolveCompletionItem !== 'function') {
             return Promise.resolve(completion);
         }
@@ -86,7 +92,7 @@ export class CompletionAdapter {
             return Promise.resolve(completion);
         }
 
-        return Promise.resolve(this.delegate.resolveCompletionItem(item, undefined)).then(resolvedItem => {
+        return Promise.resolve(this.delegate.resolveCompletionItem(item, token)).then(resolvedItem => {
 
             if (!resolvedItem) {
                 return completion;
@@ -104,9 +110,13 @@ export class CompletionAdapter {
         });
     }
 
-    releaseCompletionItems(id: number) {
+    async releaseCompletionItems(id: number): Promise<void> {
         this.cache.delete(id);
-        return Promise.resolve();
+        const toDispose = this.disposables.get(id);
+        if (toDispose) {
+            toDispose.dispose();
+            this.disposables.delete(id);
+        }
     }
 
     private convertCompletionItem(item: theia.CompletionItem, position: theia.Position, defaultRange: theia.Range, id: number, parentId: number): CompletionDto | undefined {
@@ -115,50 +125,45 @@ export class CompletionAdapter {
             return undefined;
         }
 
-        const result: CompletionDto = {
+        const toDispose = this.disposables.get(parentId);
+        if (!toDispose) {
+            throw Error('DisposableCollection is missing...');
+        }
+
+        const range = item.textEdit ? item.textEdit.range : item.range || defaultRange;
+        if (range && (!range.isSingleLine || range.start.line !== position.line)) {
+            console.warn('Invalid Completion Item -> must be single line and on the same line');
+            return undefined;
+        }
+
+        let insertText = item.label;
+        let insertTextRules = item.keepWhitespace ? CompletionItemInsertTextRule.KeepWhitespace : 0;
+        if (item.textEdit) {
+            insertText = item.textEdit.newText;
+        } else if (typeof item.insertText === 'string') {
+            insertText = item.insertText;
+        } else if (item.insertText instanceof SnippetString) {
+            insertText = item.insertText.value;
+            insertTextRules |= CompletionItemInsertTextRule.InsertAsSnippet;
+        }
+
+        return {
             id,
             parentId,
             label: item.label,
-            type: Converter.fromCompletionItemKind(item.kind),
+            kind: Converter.fromCompletionItemKind(item.kind),
             detail: item.detail,
             documentation: item.documentation,
             filterText: item.filterText,
             sortText: item.sortText,
             preselect: item.preselect,
-            insertText: '',
+            insertText,
+            insertTextRules,
+            range: Converter.fromRange(range),
             additionalTextEdits: item.additionalTextEdits && item.additionalTextEdits.map(Converter.fromTextEdit),
-            command: undefined,   // TODO: implement this: this.commands.toInternal(item.command),
+            command: this.commands.converter.toSafeCommand(item.command, toDispose),
             commitCharacters: item.commitCharacters
         };
-
-        if (typeof item.insertText === 'string') {
-            result.insertText = item.insertText;
-            result.snippetType = 'internal';
-
-        } else if (item.insertText instanceof SnippetString) {
-            result.insertText = item.insertText.value;
-            result.snippetType = 'textmate';
-
-        } else {
-            result.insertText = item.label;
-            result.snippetType = 'internal';
-        }
-
-        let range: theia.Range;
-        if (item.range) {
-            range = item.range;
-        } else {
-            range = defaultRange;
-        }
-        result.overwriteBefore = position.character - range.start.character;
-        result.overwriteAfter = range.end.character - position.character;
-
-        if (!range.isSingleLine || range.start.line !== position.line) {
-            console.warn('Invalid Completion Item -> must be single line and on the same line');
-            return undefined;
-        }
-
-        return result;
     }
 
     static hasResolveSupport(provider: theia.CompletionItemProvider): boolean {

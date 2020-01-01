@@ -14,7 +14,7 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { TextDocumentContentChangeEvent } from 'vscode-languageserver-types';
+import { TextDocumentContentChangeEvent } from 'vscode-languageserver-protocol';
 import { JsonRpcServer, ApplicationError } from '@theia/core/lib/common';
 import { injectable } from 'inversify';
 export const fileSystemPath = '/services/filesystem';
@@ -49,8 +49,17 @@ export interface FileSystem extends JsonRpcServer<FileSystemClient> {
 
     /**
      * Updates the content replacing its previous value.
+     *
+     * The optional parameter `overwriteEncoding` can be used to transform the encoding of a file.
+     *
+     * |   | encoding | overwriteEncoding | behaviour |
+     * |---|----------|-------------------|-----------|
+     * | 1 | undefined |    undefined     | read & write file in default encoding |
+     * | 2 | undefined |        ✓         | read file in default encoding; write file in `overwriteEncoding` |
+     * | 3 |     ✓    |     undefined     | read & write file in `encoding` |
+     * | 4 |     ✓    |        ✓         | read file in `encoding`; write file in `overwriteEncoding` |
      */
-    updateContent(file: FileStat, contentChanges: TextDocumentContentChangeEvent[], options?: { encoding?: string }): Promise<FileStat>;
+    updateContent(file: FileStat, contentChanges: TextDocumentContentChangeEvent[], options?: { encoding?: string, overwriteEncoding?: string }): Promise<FileStat>;
 
     /**
      * Moves the file to a new path identified by the resource.
@@ -106,6 +115,11 @@ export interface FileSystem extends JsonRpcServer<FileSystemClient> {
     getEncoding(uri: string): Promise<string>;
 
     /**
+     * Guess encoding of a given file based on its content.
+     */
+    guessEncoding(uri: string): Promise<string | undefined>;
+
+    /**
      * Return list of available roots.
      */
     getRoots(): Promise<FileStat[]>;
@@ -134,7 +148,7 @@ export interface FileSystem extends JsonRpcServer<FileSystemClient> {
      * If the URI is not a file URI, undefined is returned.
      *
      * USE WITH CAUTION: You should always prefer URIs to paths if possible, as they are
-     * portable and platform independent. Pathes should only be used in cases you directly
+     * portable and platform independent. Paths should only be used in cases you directly
      * interact with the OS, e.g. when running a command on the shell.
      */
     getFsPath(uri: string): Promise<string | undefined>

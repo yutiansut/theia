@@ -38,6 +38,13 @@ enum HcrChangeType {
     BUILD_COMPLETE = 'BUILD_COMPLETE',
 }
 
+enum LogLevel {
+    FINE = 'FINE',
+    INFO = 'INFO',
+    SEVERE = 'SEVERE',
+    WARNING = 'WARNING'
+}
+
 export namespace JavaDebugCommands {
     export const RUN: Command = {
         id: 'java.debug.run'
@@ -141,45 +148,46 @@ export class JavaDebugFrontendContribution implements FrontendApplicationContrib
 
     protected readonly toDisposeRunDebugCodeLens = new DisposableCollection();
     protected updateRunDebugCodeLens(): void {
-        if (this.preferences['java.debug.settings.enableRunDebugCodeLens'] && this.toDisposeRunDebugCodeLens.disposed) {
-            if (this.languages.registerCodeLensProvider) {
-                this.toDisposeRunDebugCodeLens.push(this.languages.registerCodeLensProvider([{ language: 'java' }], {
-                    provideCodeLenses: async params => {
-                        if (!this.commands.isEnabled(JavaDebugCommands.RESOLVE_MAIN_METHOD)) {
-                            return [];
-                        }
-                        try {
-                            const uri = params.textDocument.uri;
-                            const mainMethods = await this.commands.executeCommand<JavaMainMethod[]>(JavaDebugCommands.RESOLVE_MAIN_METHOD, uri) || [];
-                            return _.flatten(mainMethods.map(method => <CodeLens[]>[
-                                {
-                                    range: method.range,
-                                    command: {
-                                        title: '▶ Run',
-                                        command: JavaDebugCommands.RUN.id,
-                                        arguments: [method.mainClass, method.projectName, uri]
-                                    }
-                                },
-                                {
-                                    range: method.range,
-                                    command: {
-                                        title: '🐞 Debug',
-                                        command: JavaDebugCommands.DEBUG.id,
-                                        arguments: [method.mainClass, method.projectName, uri]
-                                    }
-                                }
-                            ]));
-                        } catch (e) {
-                            console.error(e);
-                            return [];
-                        }
-
-                    }
-                }));
-            }
-        } else {
+        if (!this.preferences['java.debug.settings.enableRunDebugCodeLens']) {
             this.toDisposeRunDebugCodeLens.dispose();
+            return;
         }
+        if (!this.languages.registerCodeLensProvider || !this.toDisposeRunDebugCodeLens.disposed) {
+            return;
+        }
+        this.toDisposeRunDebugCodeLens.push(this.languages.registerCodeLensProvider([{ language: 'java' }], {
+            provideCodeLenses: async params => {
+                if (!this.commands.isEnabled(JavaDebugCommands.RESOLVE_MAIN_METHOD)) {
+                    return [];
+                }
+                try {
+                    const uri = params.textDocument.uri;
+                    const mainMethods = await this.commands.executeCommand<JavaMainMethod[]>(JavaDebugCommands.RESOLVE_MAIN_METHOD, uri) || [];
+                    return _.flatten(mainMethods.map(method => <CodeLens[]>[
+                        {
+                            range: method.range,
+                            command: {
+                                title: '▶ Run',
+                                command: JavaDebugCommands.RUN.id,
+                                arguments: [method.mainClass, method.projectName, uri]
+                            }
+                        },
+                        {
+                            range: method.range,
+                            command: {
+                                title: '🐞 Debug',
+                                command: JavaDebugCommands.DEBUG.id,
+                                arguments: [method.mainClass, method.projectName, uri]
+                            }
+                        }
+                    ]));
+                } catch (e) {
+                    console.error(e);
+                    return [];
+                }
+
+            }
+        }));
     }
 
     protected async runProgram(mainClass: string, projectName: string, uri: string, noDebug: boolean = true): Promise<void> {
@@ -238,19 +246,19 @@ export class JavaDebugFrontendContribution implements FrontendApplicationContrib
             }
         }
     }
-    protected convertLogLevel(commonLogLevel: string) {
+    protected convertLogLevel(commonLogLevel: string): LogLevel {
         // convert common log level to java log level
         switch (commonLogLevel.toLowerCase()) {
             case 'verbose':
-                return 'FINE';
+                return LogLevel.FINE;
             case 'warn':
-                return 'WARNING';
+                return LogLevel.WARNING;
             case 'error':
-                return 'SEVERE';
+                return LogLevel.SEVERE;
             case 'info':
-                return 'INFO';
+                return LogLevel.INFO;
             default:
-                return 'FINE';
+                return LogLevel.FINE;
         }
     }
 

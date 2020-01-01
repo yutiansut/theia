@@ -17,7 +17,7 @@
 import { injectable, inject, decorate } from 'inversify';
 import { MonacoToProtocolConverter } from 'monaco-languageclient';
 import URI from '@theia/core/lib/common/uri';
-import { OpenerService, open, WidgetOpenMode, ApplicationShell } from '@theia/core/lib/browser';
+import { OpenerService, open, WidgetOpenMode, ApplicationShell, PreferenceService } from '@theia/core/lib/browser';
 import { EditorWidget, EditorOpenerOptions, EditorManager } from '@theia/editor/lib/browser';
 import { MonacoEditor } from './monaco-editor';
 
@@ -29,6 +29,8 @@ decorate(injectable(), monaco.services.CodeEditorServiceImpl);
 
 @injectable()
 export class MonacoEditorService extends monaco.services.CodeEditorServiceImpl {
+
+    public static readonly ENABLE_PREVIEW_PREFERENCE: string = 'editor.enablePreview';
 
     @inject(OpenerService)
     protected readonly openerService: OpenerService;
@@ -42,6 +44,9 @@ export class MonacoEditorService extends monaco.services.CodeEditorServiceImpl {
     @inject(EditorManager)
     protected readonly editors: EditorManager;
 
+    @inject(PreferenceService)
+    protected readonly preferencesService: PreferenceService;
+
     constructor() {
         super(monaco.services.StaticServices.standaloneThemeService.get());
     }
@@ -51,22 +56,41 @@ export class MonacoEditorService extends monaco.services.CodeEditorServiceImpl {
         return editor && editor.getControl();
     }
 
-    openCodeEditor(input: IResourceInput, source?: ICodeEditor, sideBySide?: boolean): monaco.Promise<CommonCodeEditor | undefined> {
+    async openCodeEditor(input: IResourceInput, source?: ICodeEditor, sideBySide?: boolean): Promise<CommonCodeEditor | undefined> {
         const uri = new URI(input.resource.toString());
         const openerOptions = this.createEditorOpenerOptions(input, source, sideBySide);
-        return monaco.Promise.wrap(open(this.openerService, uri, openerOptions).then(widget => {
-            if (widget instanceof EditorWidget && widget.editor instanceof MonacoEditor) {
-                return widget.editor.getControl();
+        const widget = await open(this.openerService, uri, openerOptions);
+        const editorWidget = await this.findEditorWidgetByUri(widget, uri.toString());
+        if (editorWidget && editorWidget.editor instanceof MonacoEditor) {
+            return editorWidget.editor.getControl();
+        }
+        return undefined;
+    }
+
+    protected async findEditorWidgetByUri(widget: object | undefined, uriAsString: string): Promise<EditorWidget | undefined> {
+        if (widget instanceof EditorWidget) {
+            if (widget.editor.uri.toString() === uriAsString) {
+                return widget;
             }
             return undefined;
-        }));
+        }
+        if (ApplicationShell.TrackableWidgetProvider.is(widget)) {
+            for (const childWidget of await widget.getTrackableWidgets()) {
+                const editorWidget = await this.findEditorWidgetByUri(childWidget, uriAsString);
+                if (editorWidget) {
+                    return editorWidget;
+                }
+            }
+        }
+        return undefined;
     }
 
     protected createEditorOpenerOptions(input: IResourceInput, source?: ICodeEditor, sideBySide?: boolean): EditorOpenerOptions {
         const mode = this.getEditorOpenMode(input);
         const selection = input.options && this.m2p.asRange(input.options.selection);
         const widgetOptions = this.getWidgetOptions(source, sideBySide);
-        return { mode, selection, widgetOptions };
+        const preview = !!this.preferencesService.get<boolean>(MonacoEditorService.ENABLE_PREVIEW_PREFERENCE, false);
+        return { mode, selection, widgetOptions, preview };
     }
     protected getEditorOpenMode(input: IResourceInput): WidgetOpenMode {
         const options = {

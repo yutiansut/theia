@@ -26,7 +26,7 @@ const mockFileStat = {
 @injectable()
 export class MockFilesystem implements FileSystem {
 
-    dispose() { }
+    dispose(): void { }
 
     getFileStat(uri: string): Promise<FileStat> {
         return Promise.resolve(mockFileStat);
@@ -77,6 +77,10 @@ export class MockFilesystem implements FileSystem {
         return Promise.resolve('');
     }
 
+    guessEncoding(uri: string): Promise<string | undefined> {
+        return Promise.resolve('');
+    }
+
     getRoots(): Promise<FileStat[]> {
         return Promise.resolve([mockFileStat]);
     }
@@ -89,7 +93,7 @@ export class MockFilesystem implements FileSystem {
         return true;
     }
 
-    setClient(client: FileSystemClient) {
+    setClient(client: FileSystemClient): void {
 
     }
 

@@ -27,9 +27,8 @@ import { DebugSession } from '@theia/debug/lib/browser/debug-session';
 import { DebugSessionConnection } from '@theia/debug/lib/browser/debug-session-connection';
 import { IWebSocket } from 'vscode-ws-jsonrpc/lib/socket/socket';
 import { FileSystem } from '@theia/filesystem/lib/common';
-import { DebugProtocol } from 'vscode-debugprotocol';
-import { TerminalWidgetOptions } from '@theia/terminal/lib/browser/base/terminal-widget';
-import { TerminalOptionsExt } from '../../../api/plugin-api';
+import { TerminalWidgetOptions, TerminalWidget } from '@theia/terminal/lib/browser/base/terminal-widget';
+import { TerminalOptionsExt } from '../../../common/plugin-api-rpc';
 
 export class PluginDebugSession extends DebugSession {
     constructor(
@@ -46,9 +45,9 @@ export class PluginDebugSession extends DebugSession {
         super(id, options, connection, terminalServer, editorManager, breakpoints, labelProvider, messages, fileSystem);
     }
 
-    protected async doRunInTerminal(terminalWidgetOptions: TerminalWidgetOptions): Promise<DebugProtocol.RunInTerminalResponse['body']> {
+    protected async doCreateTerminal(terminalWidgetOptions: TerminalWidgetOptions): Promise<TerminalWidget> {
         terminalWidgetOptions = Object.assign({}, terminalWidgetOptions, this.terminalOptionsExt);
-        return super.doRunInTerminal(terminalWidgetOptions);
+        return super.doCreateTerminal(terminalWidgetOptions);
     }
 }
 

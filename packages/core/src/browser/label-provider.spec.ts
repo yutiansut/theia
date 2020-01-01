@@ -15,36 +15,43 @@
  ********************************************************************************/
 
 import { expect } from 'chai';
-import { DefaultUriLabelProviderContribution, FOLDER_ICON } from './label-provider';
+import { DefaultUriLabelProviderContribution, URIIconReference } from './label-provider';
 import URI from '../common/uri';
 
-describe('DefaultUriLabelProviderContribution', function () {
+describe('DefaultUriLabelProviderContribution', function (): void {
 
-    it('should return a short name', function () {
+    it('should return a short name', function (): void {
         const prov = new DefaultUriLabelProviderContribution();
         const shortName = prov.getName(new URI('file:///tmp/hello/you.txt'));
 
         expect(shortName).eq('you.txt');
     });
 
-    it('should return a long name', function () {
+    it('should return a long name', function (): void {
         const prov = new DefaultUriLabelProviderContribution();
         const longName = prov.getLongName(new URI('file:///tmp/hello/you.txt'));
 
         expect(longName).eq('/tmp/hello/you.txt');
     });
 
-    it('should return icon class for something that seems to be a file', function () {
+    it('should return icon class for something that seems to be a file', function (): void {
         const prov = new DefaultUriLabelProviderContribution();
         const icon = prov.getIcon(new URI('file:///tmp/hello/you.txt'));
 
-        expect(icon).eq('text-icon medium-blue');
+        expect(icon).eq('text-icon medium-blue theia-file-icons-js');
     });
 
-    it('should return icon class for something that seems to be a directory', function () {
+    it('should return file icon class for something that seems to be a directory', function (): void {
         const prov = new DefaultUriLabelProviderContribution();
         const icon = prov.getIcon(new URI('file:///tmp/hello'));
 
-        expect(icon).eq(FOLDER_ICON);
+        expect(icon).eq(prov.defaultFileIcon);
+    });
+
+    it('should return folder icon class for something that is a directory', function (): void {
+        const prov = new DefaultUriLabelProviderContribution();
+        const icon = prov.getIcon(URIIconReference.create('folder', new URI('file:///tmp/hello')));
+
+        expect(icon).eq(prov.defaultFolderIcon);
     });
 });

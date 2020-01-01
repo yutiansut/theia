@@ -16,14 +16,15 @@
 
 import * as path from 'path';
 import * as cp from 'child_process';
-import { injectable, inject } from 'inversify';
-import { ILogger, ConnectionErrorHandler } from '@theia/core/lib/common';
+import { injectable, inject, named } from 'inversify';
+import { ILogger, ConnectionErrorHandler, ContributionProvider, MessageService } from '@theia/core/lib/common';
 import { Emitter } from '@theia/core/lib/common/event';
 import { createIpcEnv } from '@theia/core/lib/node/messaging/ipc-protocol';
-import { HostedPluginClient, ServerPluginRunner, PluginMetadata } from '../../common/plugin-protocol';
-import { RPCProtocolImpl } from '../../api/rpc-protocol';
-import { MAIN_RPC_CONTEXT } from '../../api/plugin-api';
+import { HostedPluginClient, ServerPluginRunner, PluginHostEnvironmentVariable, DeployedPlugin } from '../../common/plugin-protocol';
+import { RPCProtocolImpl } from '../../common/rpc-protocol';
+import { MAIN_RPC_CONTEXT } from '../../common/plugin-api-rpc';
 import { HostedPluginCliContribution } from './hosted-plugin-cli-contribution';
+import * as psTree from 'ps-tree';
 
 export interface IPCConnectionOptions {
     readonly serverName: string;
@@ -41,8 +42,17 @@ export class HostedPluginProcess implements ServerPluginRunner {
     @inject(HostedPluginCliContribution)
     protected readonly cli: HostedPluginCliContribution;
 
+    @inject(ContributionProvider)
+    @named(PluginHostEnvironmentVariable)
+    protected readonly pluginHostEnvironmentVariables: ContributionProvider<PluginHostEnvironmentVariable>;
+
+    @inject(MessageService)
+    protected readonly messageService: MessageService;
+
     private childProcess: cp.ChildProcess | undefined;
     private client: HostedPluginClient;
+
+    private terminatingPluginServer = false;
 
     public setClient(client: HostedPluginClient): void {
         if (this.client) {
@@ -77,6 +87,8 @@ export class HostedPluginProcess implements ServerPluginRunner {
         if (this.childProcess === undefined) {
             return;
         }
+
+        this.terminatingPluginServer = true;
         // tslint:disable-next-line:no-shadowed-variable
         const cp = this.childProcess;
         this.childProcess = undefined;
@@ -94,17 +106,26 @@ export class HostedPluginProcess implements ServerPluginRunner {
             }
         });
         const hostedPluginManager = rpc.getProxy(MAIN_RPC_CONTEXT.HOSTED_PLUGIN_MANAGER_EXT);
-        hostedPluginManager.$stopPlugin('').then(() => {
+        hostedPluginManager.$stop().then(() => {
             emitter.dispose();
-            cp.kill();
+            this.killProcessTree(cp.pid);
         });
+    }
 
+    private killProcessTree(parentPid: number): void {
+        psTree(parentPid, (err: Error, childProcesses: Array<psTree.PS>) => {
+            childProcesses.forEach((p: psTree.PS) => {
+                process.kill(parseInt(p.PID));
+            });
+            process.kill(parentPid);
+        });
     }
 
     public runPluginServer(): void {
         if (this.childProcess) {
             this.terminatePluginServer();
         }
+        this.terminatingPluginServer = false;
         this.childProcess = this.fork({
             serverName: 'hosted-plugin',
             logger: this.logger,
@@ -115,7 +136,6 @@ export class HostedPluginProcess implements ServerPluginRunner {
                 this.client.postMessage(message);
             }
         });
-
     }
 
     readonly HOSTED_PLUGIN_ENV_REGEXP_EXCLUSION = new RegExp('HOSTED_PLUGIN*');
@@ -128,6 +148,8 @@ export class HostedPluginProcess implements ServerPluginRunner {
                 delete env[key];
             }
         }
+        // apply external env variables
+        this.pluginHostEnvironmentVariables.getContributions().forEach(envVar => envVar.process(env));
         if (this.cli.extensionTestsPath) {
             env.extensionTestsPath = this.cli.extensionTestsPath;
         }
@@ -145,16 +167,46 @@ export class HostedPluginProcess implements ServerPluginRunner {
         }
 
         const childProcess = cp.fork(path.resolve(__dirname, 'plugin-host.js'), options.args, forkOptions);
-        childProcess.stdout.on('data', data => this.logger.info(`[${options.serverName}: ${childProcess.pid}] ${data.toString()}`));
-        childProcess.stderr.on('data', data => this.logger.error(`[${options.serverName}: ${childProcess.pid}] ${data.toString()}`));
+        childProcess.stdout.on('data', data => this.logger.info(`[${options.serverName}: ${childProcess.pid}] ${data.toString().trim()}`));
+        childProcess.stderr.on('data', data => this.logger.error(`[${options.serverName}: ${childProcess.pid}] ${data.toString().trim()}`));
 
         this.logger.debug(`[${options.serverName}: ${childProcess.pid}] IPC started`);
-        childProcess.once('exit', () => this.logger.debug(`[${options.serverName}: ${childProcess.pid}] IPC exited`));
-
+        childProcess.once('exit', (code: number, signal: string) => this.onChildProcessExit(options.serverName, childProcess.pid, code, signal));
+        childProcess.on('error', err => this.onChildProcessError(err));
         return childProcess;
     }
 
-    async getExtraPluginMetadata(): Promise<PluginMetadata[]> {
+    private onChildProcessExit(serverName: string, pid: number, code: number, signal: string): void {
+        if (this.terminatingPluginServer) {
+            return;
+        }
+        this.logger.error(`[${serverName}: ${pid}] IPC exited, with signal: ${signal}, and exit code: ${code}`);
+
+        const message = 'Plugin runtime crashed unexpectedly, all plugins are not working, please reload the page.';
+        let hintMessage: string = 'If it doesn\'t help, please check Theia server logs.';
+        if (signal && signal.toUpperCase() === 'SIGKILL') {
+            // May happen in case of OOM or manual force stop.
+            hintMessage = 'Probably there is not enough memory for the plugins. ' + hintMessage;
+        }
+
+        this.messageService.error(message + ' ' + hintMessage, { timeout: 15 * 60 * 1000 });
+    }
+
+    private onChildProcessError(err: Error): void {
+        this.logger.error(`Error from plugin host: ${err.message}`);
+    }
+
+    /**
+     * Provides additional plugin ids.
+     */
+    public async getExtraDeployedPluginIds(): Promise<string[]> {
+        return [];
+    }
+
+    /**
+     * Provides additional deployed plugins.
+     */
+    public async getExtraDeployedPlugins(): Promise<DeployedPlugin[]> {
         return [];
     }
 

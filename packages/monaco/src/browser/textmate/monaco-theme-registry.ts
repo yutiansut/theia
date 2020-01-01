@@ -29,6 +29,12 @@ export class MonacoThemeRegistry {
         return this.themes.get(name);
     }
 
+    setTheme(name: string, data: ThemeMix): void {
+        // monaco auto refrehes a theme with new data
+        monaco.editor.defineTheme(name, data);
+        this.themes.set(name, data);
+    }
+
     /**
      * Register VS Code compatible themes
      */
@@ -42,10 +48,6 @@ export class MonacoThemeRegistry {
             rules: [],
             settings: []
         };
-        if (this.themes.has(name)) {
-            return this.themes.get(name)!;
-        }
-        this.themes.set(name, result);
         if (typeof json.include !== 'undefined') {
             if (!includes || !includes[json.include]) {
                 console.error(`Couldn't resolve includes theme ${json.include}.`);
@@ -80,17 +82,16 @@ export class MonacoThemeRegistry {
             if (result.colors && result.colors['editor.background']) {
                 result.encodedTokensColors[2] = result.colors['editor.background'];
             }
-            monaco.editor.defineTheme(givenName, result);
+            this.setTheme(givenName, result);
         }
         return result;
     }
 
-    protected transform(tokenColor: any, acceptor: (rule: monaco.editor.ITokenThemeRule) => void) {
+    protected transform(tokenColor: any, acceptor: (rule: monaco.editor.ITokenThemeRule) => void): void {
         if (typeof tokenColor.scope === 'undefined') {
             tokenColor.scope = [''];
         } else if (typeof tokenColor.scope === 'string') {
-            // tokenColor.scope = tokenColor.scope.split(',').map((scope: string) => scope.trim()); // ?
-            tokenColor.scope = [tokenColor.scope];
+            tokenColor.scope = tokenColor.scope.split(',').map((scope: string) => scope.trim());
         }
 
         for (const scope of tokenColor.scope) {
@@ -115,12 +116,18 @@ export class MonacoThemeRegistry {
 export namespace MonacoThemeRegistry {
     export const SINGLETON = new MonacoThemeRegistry();
 
-    export const DARK_DEFAULT_THEME: string = SINGLETON.register(require('../../../data/monaco-themes/vscode/dark_plus.json'), {
+    export const DARK_DEFAULT_THEME: string = SINGLETON.register(require('../../../data/monaco-themes/vscode/dark_theia.json'), {
         './dark_defaults.json': require('../../../data/monaco-themes/vscode/dark_defaults.json'),
-        './dark_vs.json': require('../../../data/monaco-themes/vscode/dark_vs.json')
-    }, 'dark-plus', 'vs-dark').name!;
-    export const LIGHT_DEFAULT_THEME: string = SINGLETON.register(require('../../../data/monaco-themes/vscode/light_plus.json'), {
+        './dark_vs.json': require('../../../data/monaco-themes/vscode/dark_vs.json'),
+        './dark_plus.json': require('../../../data/monaco-themes/vscode/dark_plus.json')
+    }, 'dark-theia', 'vs-dark').name!;
+    export const LIGHT_DEFAULT_THEME: string = SINGLETON.register(require('../../../data/monaco-themes/vscode/light_theia.json'), {
         './light_defaults.json': require('../../../data/monaco-themes/vscode/light_defaults.json'),
-        './light_vs.json': require('../../../data/monaco-themes/vscode/light_vs.json')
-    }, 'light-plus', 'vs').name!;
+        './light_vs.json': require('../../../data/monaco-themes/vscode/light_vs.json'),
+        './light_plus.json': require('../../../data/monaco-themes/vscode/light_plus.json'),
+    }, 'light-theia', 'vs').name!;
+    export const HC_DEFAULT_THEME: string = SINGLETON.register(require('../../../data/monaco-themes/vscode/hc_theia.json'), {
+        './hc_black_defaults.json': require('../../../data/monaco-themes/vscode/hc_black_defaults.json'),
+        './hc_black.json': require('../../../data/monaco-themes/vscode/hc_black.json')
+    }, 'hc-theia', 'hc-black').name!;
 }

@@ -19,35 +19,41 @@ import Uri from 'vscode-uri';
 import { Disposable, ResourceResolver, DisposableCollection } from '@theia/core';
 import { Resource } from '@theia/core/lib/common/resource';
 import URI from '@theia/core/lib/common/uri';
-import { MAIN_RPC_CONTEXT, FileSystemMain, FileSystemExt } from '../../api/plugin-api';
-import { RPCProtocol } from '../../api/rpc-protocol';
+import { MAIN_RPC_CONTEXT, FileSystemMain, FileSystemExt } from '../../common/plugin-api-rpc';
+import { RPCProtocol } from '../../common/rpc-protocol';
 
 export class FileSystemMainImpl implements FileSystemMain, Disposable {
 
     private readonly proxy: FileSystemExt;
     private readonly resourceResolver: FSResourceResolver;
-    private readonly disposables = new Map<number, Disposable>();
+    private readonly providers = new Map<number, Disposable>();
+    private readonly toDispose = new DisposableCollection();
 
     constructor(rpc: RPCProtocol, container: interfaces.Container) {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.FILE_SYSTEM_EXT);
         this.resourceResolver = container.get(FSResourceResolver);
     }
 
+    dispose(): void {
+        this.toDispose.dispose();
+    }
+
     async $registerFileSystemProvider(handle: number, scheme: string): Promise<void> {
-        this.disposables.set(handle, await this.resourceResolver.registerResourceProvider(handle, scheme, this.proxy));
+        const toDispose = new DisposableCollection(
+            this.resourceResolver.registerResourceProvider(handle, scheme, this.proxy),
+            Disposable.create(() => this.providers.delete(handle))
+        );
+        this.providers.set(handle, toDispose);
+        this.toDispose.push(toDispose);
     }
 
     $unregisterProvider(handle: number): void {
-        const disposable = this.disposables.get(handle);
+        const disposable = this.providers.get(handle);
         if (disposable) {
             disposable.dispose();
-            this.disposables.delete(handle);
         }
     }
 
-    dispose(): void {
-        this.disposables.forEach(d => d.dispose());
-    }
 }
 
 @injectable()
@@ -119,5 +125,5 @@ export class FSResource implements Resource {
         return this.proxy.$writeFile(this.handle, Uri.parse(this.uri.toString()), content, options);
     }
 
-    dispose() { }
+    dispose(): void { }
 }

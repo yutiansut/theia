@@ -40,7 +40,7 @@ export class MonacoCommandService implements ICommandService {
         return this._onWillExecuteCommand.event;
     }
 
-    setDelegate(delegate: ICommandService | undefined) {
+    setDelegate(delegate: ICommandService | undefined): void {
         this.delegateListeners.dispose();
         this.delegate = delegate;
         if (this.delegate) {
@@ -51,20 +51,21 @@ export class MonacoCommandService implements ICommandService {
     }
 
     // tslint:disable-next-line:no-any
-    executeCommand(commandId: any, ...args: any[]): monaco.Promise<any> {
+    async executeCommand(commandId: any, ...args: any[]): Promise<any> {
         const handler = this.commandRegistry.getActiveHandler(commandId, ...args);
         if (handler) {
-            try {
-                this._onWillExecuteCommand.fire({ commandId });
-                return monaco.Promise.wrap(handler.execute(...args));
-            } catch (err) {
-                return monaco.Promise.wrapError(err);
-            }
+            this._onWillExecuteCommand.fire({ commandId });
+            return handler.execute(...args);
         }
+        return this.executeMonacoCommand(commandId, ...args);
+    }
+
+    // tslint:disable-next-line:no-any
+    async executeMonacoCommand(commandId: any, ...args: any[]): Promise<any> {
         if (this.delegate) {
             return this.delegate.executeCommand(commandId, ...args);
         }
-        return monaco.Promise.wrapError(new Error(`command '${commandId}' not found`));
+        throw new Error(`command '${commandId}' not found`);
     }
 
 }

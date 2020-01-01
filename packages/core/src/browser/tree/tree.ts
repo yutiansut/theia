@@ -15,7 +15,7 @@
  ********************************************************************************/
 
 import { injectable } from 'inversify';
-import { Event, Emitter, Disposable, DisposableCollection } from '../../common';
+import { Event, Emitter, Disposable, DisposableCollection, WaitUntilEvent, Mutable } from '../../common';
 
 export const Tree = Symbol('Tree');
 
@@ -43,16 +43,20 @@ export interface Tree extends Disposable {
     validateNode(node: TreeNode | undefined): TreeNode | undefined;
     /**
      * Refresh children of the root node.
+     *
+     * Return a valid refreshed composite root or `undefined` if such does not exist.
      */
-    refresh(): Promise<void>;
+    refresh(): Promise<Readonly<CompositeTreeNode> | undefined>;
     /**
-     * Refresh children of the given node if it is valid.
+     * Refresh children of a node for the give node id if it is valid.
+     *
+     * Return a valid refreshed composite node or `undefined` if such does not exist.
      */
-    refresh(parent: Readonly<CompositeTreeNode>): Promise<void>;
+    refresh(parent: Readonly<CompositeTreeNode>): Promise<Readonly<CompositeTreeNode> | undefined>;
     /**
      * Emit when the children of the given node are refreshed.
      */
-    readonly onNodeRefreshed: Event<Readonly<CompositeTreeNode>>;
+    readonly onNodeRefreshed: Event<Readonly<CompositeTreeNode> & WaitUntilEvent>;
 }
 
 /**
@@ -65,14 +69,20 @@ export interface TreeNode {
     readonly id: string;
     /**
      * A human-readable name of this tree node.
+     *
+     * @deprecated use `LabelProvider.getName` instead or move this property to your tree node type
      */
-    readonly name: string;
+    readonly name?: string;
     /**
      * A css string for this tree node icon.
+     *
+     * @deprecated use `LabelProvider.getIcon` instead or move this property to your tree node type
      */
     readonly icon?: string;
     /**
      * A human-readable description of this tree node.
+     *
+     * @deprecated use `LabelProvider.getLongName` instead or move this property to your tree node type
      */
     readonly description?: string;
     /**
@@ -96,6 +106,10 @@ export interface TreeNode {
 }
 
 export namespace TreeNode {
+    export function is(node: Object | undefined): node is TreeNode {
+        return !!node && typeof node === 'object' && 'id' in node && 'parent' in node;
+    }
+
     export function equals(left: TreeNode | undefined, right: TreeNode | undefined): boolean {
         return left === right || (!!left && !!right && left.id === right.id);
     }
@@ -202,11 +216,11 @@ export class TreeImpl implements Tree {
 
     protected _root: TreeNode | undefined;
     protected readonly onChangedEmitter = new Emitter<void>();
-    protected readonly onNodeRefreshedEmitter = new Emitter<CompositeTreeNode>();
+    protected readonly onNodeRefreshedEmitter = new Emitter<CompositeTreeNode & WaitUntilEvent>();
     protected readonly toDispose = new DisposableCollection();
 
     protected nodes: {
-        [id: string]: TreeNode | undefined
+        [id: string]: Mutable<TreeNode> | undefined
     } = {};
 
     constructor() {
@@ -238,12 +252,12 @@ export class TreeImpl implements Tree {
         this.onChangedEmitter.fire(undefined);
     }
 
-    get onNodeRefreshed(): Event<CompositeTreeNode> {
+    get onNodeRefreshed(): Event<CompositeTreeNode & WaitUntilEvent> {
         return this.onNodeRefreshedEmitter.event;
     }
 
-    protected fireNodeRefreshed(parent: CompositeTreeNode): void {
-        this.onNodeRefreshedEmitter.fire(parent);
+    protected async fireNodeRefreshed(parent: CompositeTreeNode): Promise<void> {
+        await WaitUntilEvent.fire(this.onNodeRefreshedEmitter, parent);
         this.fireChanged();
     }
 
@@ -256,26 +270,33 @@ export class TreeImpl implements Tree {
         return this.getNode(id);
     }
 
-    async refresh(raw?: CompositeTreeNode): Promise<void> {
+    async refresh(raw?: CompositeTreeNode): Promise<CompositeTreeNode | undefined> {
         const parent = !raw ? this._root : this.validateNode(raw);
+        let result: CompositeTreeNode | undefined;
         if (CompositeTreeNode.is(parent)) {
+            result = parent;
             const children = await this.resolveChildren(parent);
-            this.setChildren(parent, children);
+            result = await this.setChildren(parent, children);
         }
-        // FIXME: it should not be here
-        // if the idea was to support refreshing of all kind of nodes, then API should be adapted
         this.fireChanged();
+        return result;
     }
 
     protected resolveChildren(parent: CompositeTreeNode): Promise<TreeNode[]> {
         return Promise.resolve(Array.from(parent.children));
     }
 
-    protected setChildren(parent: CompositeTreeNode, children: TreeNode[]): void {
+    protected async setChildren(parent: CompositeTreeNode, children: TreeNode[]): Promise<CompositeTreeNode | undefined> {
+        const root = this.getRootNode(parent);
+        if (this.nodes[root.id] && this.nodes[root.id] !== root) {
+            console.error(`Child node '${parent.id}' does not belong to this '${root.id}' tree.`);
+            return undefined;
+        }
         this.removeNode(parent);
         parent.children = children;
         this.addNode(parent);
-        this.fireNodeRefreshed(parent);
+        await this.fireNodeRefreshed(parent);
+        return parent;
     }
 
     protected removeNode(node: TreeNode | undefined): void {
@@ -297,12 +318,6 @@ export class TreeImpl implements Tree {
 
     protected addNode(node: TreeNode | undefined): void {
         if (node) {
-            const root = this.getRootNode(node);
-            if (this.nodes[root.id] && this.nodes[root.id] !== root) {
-                console.debug('Child node does not belong to this tree. Resetting root.');
-                this.root = root;
-                return;
-            }
             this.nodes[node.id] = node;
         }
         if (CompositeTreeNode.is(node)) {

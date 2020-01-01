@@ -97,10 +97,12 @@ export class MonacoOutlineContribution implements FrontendApplicationContributio
         const editor = this.editorManager.currentEditor;
         if (editor) {
             const model = MonacoEditor.get(editor)!.getControl().getModel();
-            this.toDisposeOnEditor.push(model.onDidChangeContent(() => {
-                this.roots = undefined; // Invalidate the previously resolved roots.
-                this.updateOutline();
-            }));
+            if (model) {
+                this.toDisposeOnEditor.push(model.onDidChangeContent(() => {
+                    this.roots = undefined; // Invalidate the previously resolved roots.
+                    this.updateOutline();
+                }));
+            }
             this.toDisposeOnEditor.push(editor.editor.onSelectionChanged(selection => this.updateOutline(selection)));
         }
         this.updateOutline();
@@ -145,7 +147,7 @@ export class MonacoOutlineContribution implements FrontendApplicationContributio
                     if (token.isCancellationRequested) {
                         return [];
                     }
-                    const nodes = this.createNodes(uri, symbols);
+                    const nodes = this.createNodes(uri, symbols || []);
                     this.roots.push(...nodes);
                 } catch {
                     /* collect symbols from other providers */
@@ -222,7 +224,7 @@ export class MonacoOutlineContribution implements FrontendApplicationContributio
      * If the argument is a `DocumentSymbol`, then `getFullRange` will be used to retrieve the range of the underlying symbol.
      */
     protected parentContains(candidate: DocumentSymbol | Range, parent: DocumentSymbol | Range, rangeBased: boolean): boolean {
-        // TODO: move this code to the `monaco-languageclient`: https://github.com/theia-ide/theia/pull/2885#discussion_r217800446
+        // TODO: move this code to the `monaco-languageclient`: https://github.com/eclipse-theia/theia/pull/2885#discussion_r217800446
         const candidateRange = Range.is(candidate) ? candidate : this.getFullRange(candidate);
         const parentRange = Range.is(parent) ? parent : this.getFullRange(parent);
         const sameStartLine = candidateRange.start.line === parentRange.start.line;

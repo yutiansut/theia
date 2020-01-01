@@ -23,6 +23,8 @@ import * as ReactDOM from 'react-dom';
 import { Event, Emitter, Disposable } from '@theia/core/lib/common';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 import { SearchInWorkspaceContextKeyService } from './search-in-workspace-context-key-service';
+import { ProgressLocationService } from '@theia/core/lib/browser/progress-location-service';
+import { ProgressBar } from '@theia/core/lib/browser/progress-bar';
 
 export interface SearchFieldState {
     className: string;
@@ -80,6 +82,9 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
 
     @inject(SearchInWorkspaceContextKeyService)
     protected readonly contextKeyService: SearchInWorkspaceContextKeyService;
+
+    @inject(ProgressLocationService)
+    protected readonly progressLocationService: ProgressLocationService;
 
     @postConstruct()
     protected init(): void {
@@ -139,6 +144,9 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
         }));
 
         this.toDispose.push(this.resultTreeWidget);
+
+        const onProgress = this.progressLocationService.onProgress('search');
+        this.toDispose.push(new ProgressBar({ container: this.node, insertMode: 'prepend' }, onProgress));
     }
 
     storeState(): object {
@@ -181,6 +189,19 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
             (include as HTMLInputElement).value = value;
         }
         this.update();
+    }
+
+    /**
+     * Update the search term and input field.
+     * @param term the search term.
+     */
+    updateSearchTerm(term: string): void {
+        this.searchTerm = term;
+        const search = document.getElementById('search-input-field');
+        if (search) {
+            (search as HTMLInputElement).value = term;
+        }
+        this.refresh();
     }
 
     hasResultList(): boolean {
@@ -235,8 +256,11 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
 
     protected onUpdateRequest(msg: Message): void {
         super.onUpdateRequest(msg);
-        ReactDOM.render(<React.Fragment>{this.renderSearchHeader()}{this.renderSearchInfo()}</React.Fragment>, this.searchFormContainer);
-        this.onDidUpdateEmitter.fire(undefined);
+        const searchInfo = this.renderSearchInfo();
+        if (searchInfo) {
+            ReactDOM.render(<React.Fragment>{this.renderSearchHeader()}{searchInfo}</React.Fragment>, this.searchFormContainer);
+            this.onDidUpdateEmitter.fire(undefined);
+        }
     }
 
     protected onResize(msg: Widget.ResizeMessage): void {
@@ -260,7 +284,7 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
         this.focusInputField();
     }
 
-    protected focusInputField() {
+    protected focusInputField(): void {
         const f = document.getElementById('search-input-field');
         if (f) {
             (f as HTMLInputElement).focus();
@@ -321,25 +345,24 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
     }
 
     protected readonly focusSearchFieldContainer = () => this.doFocusSearchFieldContainer();
-    protected doFocusSearchFieldContainer() {
+    protected doFocusSearchFieldContainer(): void {
         this.searchFieldContainerIsFocused = true;
         this.update();
     }
     protected readonly unfocusSearchFieldContainer = () => this.doUnfocusSearchFieldContainer();
-    protected doUnfocusSearchFieldContainer() {
+    protected doUnfocusSearchFieldContainer(): void {
         this.searchFieldContainerIsFocused = false;
         this.update();
     }
 
     protected readonly search = (e: React.KeyboardEvent) => this.doSearch(e);
-    protected doSearch(e: React.KeyboardEvent) {
+    protected doSearch(e: React.KeyboardEvent): void {
         if (e.target) {
             if (Key.ARROW_DOWN.keyCode === e.keyCode) {
                 this.resultTreeWidget.focusFirstResult();
             } else {
                 this.searchTerm = (e.target as HTMLInputElement).value;
                 this.resultTreeWidget.search(this.searchTerm, (this.searchInWorkspaceOptions || {}));
-                this.update();
             }
         }
     }
@@ -347,11 +370,13 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
     protected renderSearchField(): React.ReactNode {
         const input = <input
             id='search-input-field'
+            className='theia-input'
             title='Search'
             type='text'
             size={1}
             placeholder='Search'
             defaultValue={this.searchTerm}
+            autoComplete='off'
             onKeyUp={this.search}
             onFocus={this.handleFocusSearchInputBox}
             onBlur={this.handleBlurSearchInputBox}
@@ -373,7 +398,7 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
     protected handleBlurSearchInputBox = () => this.contextKeyService.setSearchInputBoxFocus(false);
 
     protected readonly updateReplaceTerm = (e: React.KeyboardEvent) => this.doUpdateReplaceTerm(e);
-    protected doUpdateReplaceTerm(e: React.KeyboardEvent) {
+    protected doUpdateReplaceTerm(e: React.KeyboardEvent): void {
         if (e.target) {
             this.replaceTerm = (e.target as HTMLInputElement).value;
             this.resultTreeWidget.replaceTerm = this.replaceTerm;
@@ -387,6 +412,7 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
         return <div className={`replace-field${this.showReplaceField ? '' : ' hidden'}`}>
             <input
                 id='replace-input-field'
+                className='theia-input'
                 title='Replace'
                 type='text'
                 size={1}
@@ -404,11 +430,17 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
     protected handleBlurReplaceInputBox = () => this.contextKeyService.setReplaceInputBoxFocus(false);
 
     protected renderReplaceAllButtonContainer(): React.ReactNode {
+        // The `Replace All` button is enabled if there is a search term present with results.
+        const enabled: boolean = this.searchTerm !== '' && this.resultNumber > 0;
         return <div className='replace-all-button-container'>
             <span
                 title='Replace All'
-                className={`replace-all-button${this.searchTerm === '' ? ' disabled' : ''}`}
-                onClick={() => this.resultTreeWidget.replace(undefined)}>
+                className={`replace-all-button${enabled ? ' ' : ' disabled'}`}
+                onClick={() => {
+                    if (enabled) {
+                        this.resultTreeWidget.replace(undefined);
+                    }
+                }}>
             </span>
         </div>;
     }
@@ -436,7 +468,7 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
         this.update();
     }
 
-    protected updateSearchOptions() {
+    protected updateSearchOptions(): void {
         this.searchInWorkspaceOptions.matchCase = this.matchCaseState.enabled;
         this.searchInWorkspaceOptions.matchWholeWord = this.wholeWordState.enabled;
         this.searchInWorkspaceOptions.useRegExp = this.regExpState.enabled;
@@ -473,6 +505,7 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
         return <div className='glob-field'>
             <div className='label'>{'files to ' + kind}</div>
             <input
+                className='theia-input'
                 type='text'
                 size={1}
                 defaultValue={value}
@@ -503,19 +536,24 @@ export class SearchInWorkspaceWidget extends BaseWidget implements StatefulWidge
 
     protected renderSearchInfo(): React.ReactNode {
         let message = '';
-        if (this.searchInWorkspaceOptions.include && this.searchInWorkspaceOptions.include.length > 0 && this.resultNumber === 0) {
-            message = `No results found in '${this.searchInWorkspaceOptions.include}'`;
-        } else if (this.resultNumber === 0) {
-            message = 'No results found.';
-        } else {
-            if (this.resultNumber === 1 && this.resultTreeWidget.fileNumber === 1) {
-                message = `${this.resultNumber} result in ${this.resultTreeWidget.fileNumber} file`;
-            } else if (this.resultTreeWidget.fileNumber === 1) {
-                message = `${this.resultNumber} results in ${this.resultTreeWidget.fileNumber} file`;
+        if (this.searchTerm) {
+            if (this.searchInWorkspaceOptions.include && this.searchInWorkspaceOptions.include.length > 0 && this.resultNumber === 0) {
+                message = `No results found in '${this.searchInWorkspaceOptions.include}'`;
+            } else if (this.resultNumber === 0) {
+                message = 'No results found.';
             } else {
-                message = `${this.resultNumber} results in ${this.resultTreeWidget.fileNumber} files`;
+                if (this.resultNumber === 1 && this.resultTreeWidget.fileNumber === 1) {
+                    message = `${this.resultNumber} result in ${this.resultTreeWidget.fileNumber} file`;
+                } else if (this.resultTreeWidget.fileNumber === 1) {
+                    message = `${this.resultNumber} results in ${this.resultTreeWidget.fileNumber} file`;
+                } else if (this.resultTreeWidget.fileNumber > 0) {
+                    message = `${this.resultNumber} results in ${this.resultTreeWidget.fileNumber} files`;
+                } else {
+                    // if fileNumber === 0, return undefined so that `onUpdateRequest()` would not re-render component
+                    return undefined;
+                }
             }
         }
-        return this.searchTerm !== '' ? <div className='search-info'>{message}</div> : '';
+        return <div className='search-info'>{message}</div>;
     }
 }

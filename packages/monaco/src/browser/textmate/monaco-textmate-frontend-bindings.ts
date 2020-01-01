@@ -17,8 +17,6 @@
 import { interfaces } from 'inversify';
 import { FrontendApplicationContribution, isBasicWasmSupported } from '@theia/core/lib/browser';
 import { bindContributionProvider } from '@theia/core';
-import { ThemeService } from '@theia/core/lib/browser/theming';
-import { BuiltinTextmateThemeProvider } from './monaco-textmate-builtin-theme-provider';
 import { TextmateRegistry } from './textmate-registry';
 import { LanguageGrammarDefinitionContribution } from './textmate-contribution';
 import { MonacoTextmateService, OnigasmPromise } from './monaco-textmate-service';
@@ -31,7 +29,7 @@ export function fetchOnigasm(): Promise<ArrayBuffer> {
         const onigasmPath = require('onigasm/lib/onigasm.wasm'); // webpack doing its magic here
         const request = new XMLHttpRequest();
 
-        request.onreadystatechange = function () {
+        request.onreadystatechange = function (): void {
             if (this.readyState === XMLHttpRequest.DONE) {
                 if (this.status === 200) {
                     resolve(this.response);
@@ -68,7 +66,4 @@ export default (bind: interfaces.Bind, unbind: interfaces.Unbind, isBound: inter
     bindContributionProvider(bind, LanguageGrammarDefinitionContribution);
     bind(TextmateRegistry).toSelf().inSingletonScope();
     bind(MonacoThemeRegistry).toDynamicValue(() => MonacoThemeRegistry.SINGLETON).inSingletonScope();
-
-    const themeService = ThemeService.get();
-    themeService.register(...BuiltinTextmateThemeProvider.theiaTextmateThemes);
 };

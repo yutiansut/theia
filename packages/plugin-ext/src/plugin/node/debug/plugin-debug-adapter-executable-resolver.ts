@@ -15,18 +15,19 @@
  ********************************************************************************/
 
 import * as path from 'path';
-import { PlatformSpecificAdapterContribution, DebuggerContribution } from '../../../common';
+import * as theia from '@theia/plugin';
+import { PlatformSpecificAdapterContribution, PluginPackageDebuggersContribution } from '../../../common';
 import { isWindows, isOSX } from '@theia/core/lib/common/os';
-import { DebugAdapterExecutable } from '@theia/debug/lib/common/debug-model';
 
 /**
  * Resolves [DebugAdapterExecutable](#DebugAdapterExecutable) based on contribution.
  */
-export async function resolveDebugAdapterExecutable(pluginPath: string, debuggerContribution: DebuggerContribution): Promise<DebugAdapterExecutable> {
+export async function resolveDebugAdapterExecutable(
+    pluginPath: string, debuggerContribution: PluginPackageDebuggersContribution): Promise<theia.DebugAdapterExecutable | undefined> {
     const info = toPlatformInfo(debuggerContribution);
     let program = (info && info.program || debuggerContribution.program);
     if (!program) {
-        throw new Error('It is not possible to provide debug adapter executable. Program not found.');
+        return undefined;
     }
     program = path.join(pluginPath, program);
     const programArgs = info && info.args || debuggerContribution.args || [];
@@ -43,7 +44,7 @@ export async function resolveDebugAdapterExecutable(pluginPath: string, debugger
     };
 }
 
-function toPlatformInfo(executable: DebuggerContribution): PlatformSpecificAdapterContribution | undefined {
+function toPlatformInfo(executable: PluginPackageDebuggersContribution): PlatformSpecificAdapterContribution | undefined {
     if (isWindows && !process.env.hasOwnProperty('PROCESSOR_ARCHITEW6432')) {
         return executable.winx86 || executable.win || executable.windows;
     }

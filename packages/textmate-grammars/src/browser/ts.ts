@@ -13,9 +13,13 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 
 import { injectable, inject } from 'inversify';
-import { LanguageGrammarDefinitionContribution, TextmateRegistry } from '@theia/monaco/lib/browser/textmate';
+import { LanguageGrammarDefinitionContribution, TextmateRegistry, GrammarDefinition } from '@theia/monaco/lib/browser/textmate';
 import { MonacoSnippetSuggestProvider } from '@theia/monaco/lib/browser/monaco-snippet-suggest-provider';
 
 @injectable()
@@ -26,12 +30,12 @@ export class TypescriptContribution implements LanguageGrammarDefinitionContribu
     @inject(MonacoSnippetSuggestProvider)
     protected readonly snippetSuggestProvider: MonacoSnippetSuggestProvider;
 
-    registerTextmateLanguage(registry: TextmateRegistry) {
+    registerTextmateLanguage(registry: TextmateRegistry): void {
         this.registerTypeScript();
         this.registerSnippets();
         const grammar = require('../../data/typescript.tmlanguage.json');
         registry.registerTextmateGrammarScope('source.ts', {
-            async getGrammarDefinition() {
+            async getGrammarDefinition(): Promise<GrammarDefinition> {
                 return {
                     format: 'json',
                     content: grammar,
@@ -51,7 +55,7 @@ export class TypescriptContribution implements LanguageGrammarDefinitionContribu
 
         const jsxGrammar = require('../../data/typescript.tsx.tmlanguage.json');
         registry.registerTextmateGrammarScope('source.tsx', {
-            async getGrammarDefinition() {
+            async getGrammarDefinition(): Promise<GrammarDefinition> {
                 return {
                     format: 'json',
                     content: jsxGrammar,
@@ -70,7 +74,7 @@ export class TypescriptContribution implements LanguageGrammarDefinitionContribu
         });
     }
 
-    protected registerTypeScript() {
+    protected registerTypeScript(): void {
         monaco.languages.register({
             id: this.ts_id,
             aliases: [
@@ -106,6 +110,45 @@ export class TypescriptContribution implements LanguageGrammarDefinitionContribu
     }
 
     protected configuration: monaco.languages.LanguageConfiguration = {
+        // copied and modified from https://github.com/microsoft/vscode/blob/master/extensions/typescript-language-features/src/features/languageConfiguration.ts
+        'indentationRules': {
+            'decreaseIndentPattern': /^((?!.*?\/\*).*\*\/)?\s*[\}\]].*$/,
+            'increaseIndentPattern': /^((?!\/\/).)*(\{[^}"'`]*|\([^)"'`]*|\[[^\]"'`]*)$/
+        },
+        'wordPattern': /(-?\d*\.\d\w*)|([^\`\~\!\@\#\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
+        'onEnterRules': [
+            {
+                // e.g. /** | */
+                'beforeText': /^\s*\/\*\*(?!\/)([^\*]|\*(?!\/))*$/,
+                'afterText': /^\s*\*\/$/,
+                'action': { indentAction: monaco.languages.IndentAction.IndentOutdent, appendText: ' * ' },
+            },
+            {
+                // e.g. /** ...|
+                'beforeText': /^\s*\/\*\*(?!\/)([^\*]|\*(?!\/))*$/,
+                'action': { indentAction: monaco.languages.IndentAction.None, appendText: ' * ' },
+            },
+            {
+                // e.g.  * ...|
+                'beforeText': /^(\t|[ ])*[ ]\*([ ]([^\*]|\*(?!\/))*)?$/,
+                'action': { indentAction: monaco.languages.IndentAction.None, appendText: '* ' },
+            },
+            {
+                // e.g.  */|
+                'beforeText': /^(\t|[ ])*[ ]\*\/\s*$/,
+                'action': { indentAction: monaco.languages.IndentAction.None, removeText: 1 },
+            },
+            {
+                // e.g.  *-----*/|
+                'beforeText': /^(\t|[ ])*[ ]\*[^/]*\*\/\s*$/,
+                'action': { indentAction: monaco.languages.IndentAction.None, removeText: 1 },
+            },
+            {
+                'beforeText': /^\s*(\bcase\s.+:|\bdefault:)$/,
+                'afterText': /^(?!\s*(\bcase\b|\bdefault\b))/,
+                'action': { indentAction: monaco.languages.IndentAction.Indent },
+            }
+        ],
         'comments': {
             'lineComment': '//',
             'blockComment': ['/*', '*/']

@@ -14,17 +14,28 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 import { interfaces } from 'inversify';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import * as types from '../../plugin/types-impl';
-import { StatusBarMessageRegistryMain } from '../../api/plugin-api';
+import { StatusBarMessageRegistryMain } from '../../common/plugin-api-rpc';
 import { StatusBar, StatusBarAlignment, StatusBarEntry } from '@theia/core/lib/browser/status-bar/status-bar';
+import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
 
-export class StatusBarMessageRegistryMainImpl implements StatusBarMessageRegistryMain {
-    private delegate: StatusBar;
+export class StatusBarMessageRegistryMainImpl implements StatusBarMessageRegistryMain, Disposable {
+    private readonly delegate: StatusBar;
+    private readonly entries = new Map<string, StatusBarEntry>();
+    private readonly toDispose = new DisposableCollection(
+        Disposable.create(() => { /* mark as not disposed */ })
+    );
 
-    private entries: Map<string, StatusBarEntry> = new Map();
+    protected readonly colorRegistry: ColorRegistry;
 
     constructor(container: interfaces.Container) {
         this.delegate = container.get(StatusBar);
+        this.colorRegistry = container.get(ColorRegistry);
+    }
+
+    dispose(): void {
+        this.toDispose.dispose();
     }
 
     async $setMessage(id: string,
@@ -38,13 +49,18 @@ export class StatusBarMessageRegistryMainImpl implements StatusBarMessageRegistr
             text: text || '',
             priority,
             alignment: alignment === types.StatusBarAlignment.Left ? StatusBarAlignment.LEFT : StatusBarAlignment.RIGHT,
-            color,
+            color: color && (this.colorRegistry.getCurrentColor(color) || color),
             tooltip,
             command
         };
 
         this.entries.set(id, entry);
         await this.delegate.setElement(id, entry);
+        if (this.toDispose.disposed) {
+            this.$dispose(id);
+        } else {
+            this.toDispose.push(Disposable.create(() => this.$dispose(id)));
+        }
     }
 
     $update(id: string, message: string): void {

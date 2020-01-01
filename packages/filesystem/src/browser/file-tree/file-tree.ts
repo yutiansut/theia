@@ -18,7 +18,6 @@ import { injectable, inject } from 'inversify';
 import URI from '@theia/core/lib/common/uri';
 import { TreeNode, CompositeTreeNode, SelectableTreeNode, ExpandableTreeNode, TreeImpl } from '@theia/core/lib/browser';
 import { FileSystem, FileStat } from '../../common';
-import { LabelProvider } from '@theia/core/lib/browser/label-provider';
 import { UriSelection } from '@theia/core/lib/common/selection';
 import { FileSelection } from '../file-selection';
 
@@ -26,7 +25,6 @@ import { FileSelection } from '../file-selection';
 export class FileTree extends TreeImpl {
 
     @inject(FileSystem) protected readonly fileSystem: FileSystem;
-    @inject(LabelProvider) protected readonly labelProvider: LabelProvider;
 
     async resolveChildren(parent: CompositeTreeNode): Promise<TreeNode[]> {
         if (FileStatNode.is(parent)) {
@@ -54,15 +52,13 @@ export class FileTree extends TreeImpl {
             return [];
         }
         const result = await Promise.all(fileStat.children.map(async child =>
-            await this.toNode(child, parent)
+            this.toNode(child, parent)
         ));
         return result.sort(DirNode.compare);
     }
 
-    protected async toNode(fileStat: FileStat, parent: CompositeTreeNode): Promise<FileNode | DirNode> {
+    protected toNode(fileStat: FileStat, parent: CompositeTreeNode): FileNode | DirNode {
         const uri = new URI(fileStat.uri);
-        const name = await this.labelProvider.getName(uri);
-        const icon = await this.labelProvider.getIcon(fileStat);
         const id = this.toNodeId(uri, parent);
         const node = this.getNode(id);
         if (fileStat.isDirectory) {
@@ -71,7 +67,7 @@ export class FileTree extends TreeImpl {
                 return node;
             }
             return <DirNode>{
-                id, uri, fileStat, name, icon, parent,
+                id, uri, fileStat, parent,
                 expanded: false,
                 selected: false,
                 children: []
@@ -82,7 +78,7 @@ export class FileTree extends TreeImpl {
             return node;
         }
         return <FileNode>{
-            id, uri, fileStat, name, icon, parent,
+            id, uri, fileStat, parent,
             selected: false
         };
     }
@@ -109,19 +105,32 @@ export namespace FileStatNode {
 
 export type FileNode = FileStatNode;
 export namespace FileNode {
-    export function is(node: TreeNode | undefined): node is FileNode {
+    export function is(node: Object | undefined): node is FileNode {
         return FileStatNode.is(node) && !node.fileStat.isDirectory;
     }
 }
 
 export type DirNode = FileStatNode & ExpandableTreeNode;
 export namespace DirNode {
-    export function is(node: TreeNode | undefined): node is DirNode {
+    export function is(node: Object | undefined): node is DirNode {
         return FileStatNode.is(node) && node.fileStat.isDirectory;
     }
 
     export function compare(node: TreeNode, node2: TreeNode): number {
-        return DirNode.dirCompare(node, node2) || node.name.localeCompare(node2.name);
+        return DirNode.dirCompare(node, node2) || uriCompare(node, node2);
+    }
+
+    export function uriCompare(node: TreeNode, node2: TreeNode): number {
+        if (FileNode.is(node)) {
+            if (FileNode.is(node2)) {
+                return node.uri.displayName.localeCompare(node2.uri.displayName);
+            }
+            return 1;
+        }
+        if (FileNode.is(node2)) {
+            return -1;
+        }
+        return 0;
     }
 
     export function dirCompare(node: TreeNode, node2: TreeNode): number {
@@ -130,13 +139,11 @@ export namespace DirNode {
         return b - a;
     }
 
-    export function createRoot(fileStat: FileStat, name: string, icon: string): DirNode {
+    export function createRoot(fileStat: FileStat): DirNode {
         const uri = new URI(fileStat.uri);
         const id = fileStat.uri;
         return {
             id, uri, fileStat,
-            name,
-            icon,
             visible: true,
             parent: undefined,
             children: [],

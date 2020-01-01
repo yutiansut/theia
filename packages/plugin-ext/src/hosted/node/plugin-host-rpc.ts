@@ -15,7 +15,7 @@
  ********************************************************************************/
 
 import { PluginManagerExtImpl } from '../../plugin/plugin-manager';
-import { MAIN_RPC_CONTEXT, Plugin, PluginAPIFactory } from '../../api/plugin-api';
+import { MAIN_RPC_CONTEXT, Plugin, PluginAPIFactory } from '../../common/plugin-api-rpc';
 import { PluginMetadata } from '../../common/plugin-protocol';
 import { createAPIFactory } from '../../plugin/plugin-context';
 import { EnvExtImpl } from '../../plugin/env';
@@ -25,6 +25,11 @@ import { DebugExtImpl } from '../../plugin/node/debug/debug';
 import { EditorsAndDocumentsExtImpl } from '../../plugin/editors-and-documents';
 import { WorkspaceExtImpl } from '../../plugin/workspace';
 import { MessageRegistryExt } from '../../plugin/message-registry';
+import { EnvNodeExtImpl } from '../../plugin/node/env-node-ext';
+import { ClipboardExt } from '../../plugin/clipboard-ext';
+import { loadManifest } from './plugin-manifest-loader';
+import { KeyValueStorageProxy } from '../../plugin/plugin-storage';
+import { WebviewsExtImpl } from '../../plugin/webviews';
 
 /**
  * Handle the RPC calls.
@@ -39,18 +44,23 @@ export class PluginHostRPC {
     constructor(protected readonly rpc: any) {
     }
 
-    initialize() {
-        const envExt = new EnvExtImpl(this.rpc);
+    initialize(): void {
+        const envExt = new EnvNodeExtImpl(this.rpc);
+        const storageProxy = new KeyValueStorageProxy(this.rpc);
         const debugExt = new DebugExtImpl(this.rpc);
         const editorsAndDocumentsExt = new EditorsAndDocumentsExtImpl(this.rpc);
         const messageRegistryExt = new MessageRegistryExt(this.rpc);
         const workspaceExt = new WorkspaceExtImpl(this.rpc, editorsAndDocumentsExt, messageRegistryExt);
         const preferenceRegistryExt = new PreferenceRegistryExtImpl(this.rpc, workspaceExt);
-        this.pluginManager = this.createPluginManager(envExt, preferenceRegistryExt, this.rpc);
+        const clipboardExt = new ClipboardExt(this.rpc);
+        const webviewExt = new WebviewsExtImpl(this.rpc, workspaceExt);
+        this.pluginManager = this.createPluginManager(envExt, storageProxy, preferenceRegistryExt, webviewExt, this.rpc);
         this.rpc.set(MAIN_RPC_CONTEXT.HOSTED_PLUGIN_MANAGER_EXT, this.pluginManager);
         this.rpc.set(MAIN_RPC_CONTEXT.EDITORS_AND_DOCUMENTS_EXT, editorsAndDocumentsExt);
         this.rpc.set(MAIN_RPC_CONTEXT.WORKSPACE_EXT, workspaceExt);
         this.rpc.set(MAIN_RPC_CONTEXT.PREFERENCE_REGISTRY_EXT, preferenceRegistryExt);
+        this.rpc.set(MAIN_RPC_CONTEXT.STORAGE_EXT, storageProxy);
+        this.rpc.set(MAIN_RPC_CONTEXT.WEBVIEWS_EXT, webviewExt);
 
         this.apiFactory = createAPIFactory(
             this.rpc,
@@ -60,13 +70,16 @@ export class PluginHostRPC {
             preferenceRegistryExt,
             editorsAndDocumentsExt,
             workspaceExt,
-            messageRegistryExt
+            messageRegistryExt,
+            clipboardExt,
+            webviewExt
         );
     }
 
     // tslint:disable-next-line:no-any
     initContext(contextPath: string, plugin: Plugin): any {
-        console.log('PLUGIN_HOST(' + process.pid + '): initializing(' + contextPath + ')');
+        const { name, version } = plugin.rawModel;
+        console.log('PLUGIN_HOST(' + process.pid + '): initializing(' + name + '@' + version + ' with ' + contextPath + ')');
         try {
             const backendInit = require(contextPath);
             backendInit.doInitialization(this.apiFactory, plugin);
@@ -75,16 +88,10 @@ export class PluginHostRPC {
         }
     }
 
-    /*
-     * Stop the given context by calling the plug-in manager.
-     * note: stopPlugin can also be invoked through RPC proxy.
-     */
-    stopContext(): PromiseLike<void> {
-        return this.pluginManager.$stopPlugin('');
-    }
-
-    // tslint:disable-next-line:no-any
-    createPluginManager(envExt: EnvExtImpl, preferencesManager: PreferenceRegistryExtImpl, rpc: any): PluginManagerExtImpl {
+    createPluginManager(
+        envExt: EnvExtImpl, storageProxy: KeyValueStorageProxy, preferencesManager: PreferenceRegistryExtImpl, webview: WebviewsExtImpl,
+        // tslint:disable-next-line:no-any
+        rpc: any): PluginManagerExtImpl {
         const { extensionTestsPath } = process.env;
         const self = this;
         const pluginManager = new PluginManagerExtImpl({
@@ -92,56 +99,90 @@ export class PluginHostRPC {
                 console.log('PLUGIN_HOST(' + process.pid + '): PluginManagerExtImpl/loadPlugin(' + plugin.pluginPath + ')');
                 try {
                     // cleaning the cache for all files of that plug-in.
-                    Object.keys(require.cache).forEach(key => {
+                    Object.keys(require.cache).forEach(function (key): void {
+                        const mod: NodeJS.Module = require.cache[key];
+
+                        // attempting to reload a native module will throw an error, so skip them
+                        if (mod.id.endsWith('.node')) {
+                            return;
+                        }
+
+                        // remove children that are part of the plug-in
+                        let i = mod.children.length;
+                        while (i--) {
+                            const childMod: NodeJS.Module = mod.children[i];
+                            // ensure the child module is not null, is in the plug-in folder, and is not a native module (see above)
+                            if (childMod && childMod.id.startsWith(plugin.pluginFolder) && !childMod.id.endsWith('.node')) {
+                                // cleanup exports - note that some modules (e.g. ansi-styles) define their
+                                // exports in an immutable manner, so overwriting the exports throws an error
+                                delete childMod.exports;
+                                mod.children.splice(i, 1);
+                                for (let j = 0; j < childMod.children.length; j++) {
+                                    delete childMod.children[j];
+                                }
+                            }
+                        }
+
                         if (key.startsWith(plugin.pluginFolder)) {
                             // delete entry
                             delete require.cache[key];
+                            const ix = mod.parent!.children.indexOf(mod);
+                            if (ix >= 0) {
+                                mod.parent!.children.splice(ix, 1);
+                            }
                         }
+
                     });
                     return require(plugin.pluginPath);
                 } catch (e) {
                     console.error(e);
                 }
             },
-            init(raw: PluginMetadata[]): [Plugin[], Plugin[]] {
+            async init(raw: PluginMetadata[]): Promise<[Plugin[], Plugin[]]> {
                 console.log('PLUGIN_HOST(' + process.pid + '): PluginManagerExtImpl/init()');
                 const result: Plugin[] = [];
                 const foreign: Plugin[] = [];
                 for (const plg of raw) {
-                    const pluginModel = plg.model;
-                    const pluginLifecycle = plg.lifecycle;
-                    if (pluginModel.entryPoint!.backend) {
+                    try {
+                        const pluginModel = plg.model;
+                        const pluginLifecycle = plg.lifecycle;
 
-                        let backendInitPath = pluginLifecycle.backendInitPath;
-                        // if no init path, try to init as regular Theia plugin
-                        if (!backendInitPath) {
-                            backendInitPath = __dirname + '/scanners/backend-init-theia.js';
+                        const rawModel = await loadManifest(pluginModel.packagePath);
+                        rawModel.packagePath = pluginModel.packagePath;
+                        if (pluginModel.entryPoint!.frontend) {
+                            foreign.push({
+                                pluginPath: pluginModel.entryPoint.frontend!,
+                                pluginFolder: pluginModel.packagePath,
+                                model: pluginModel,
+                                lifecycle: pluginLifecycle,
+                                rawModel
+                            });
+                        } else {
+                            let backendInitPath = pluginLifecycle.backendInitPath;
+                            // if no init path, try to init as regular Theia plugin
+                            if (!backendInitPath) {
+                                backendInitPath = __dirname + '/scanners/backend-init-theia.js';
+                            }
+
+                            const plugin: Plugin = {
+                                pluginPath: pluginModel.entryPoint.backend!,
+                                pluginFolder: pluginModel.packagePath,
+                                model: pluginModel,
+                                lifecycle: pluginLifecycle,
+                                rawModel
+                            };
+
+                            self.initContext(backendInitPath, plugin);
+
+                            result.push(plugin);
                         }
-
-                        const plugin: Plugin = {
-                            pluginPath: pluginModel.entryPoint.backend!,
-                            pluginFolder: plg.source.packagePath,
-                            model: pluginModel,
-                            lifecycle: pluginLifecycle,
-                            rawModel: plg.source
-                        };
-
-                        self.initContext(backendInitPath, plugin);
-
-                        result.push(plugin);
-                    } else {
-                        foreign.push({
-                            pluginPath: pluginModel.entryPoint.frontend!,
-                            pluginFolder: plg.source.packagePath,
-                            model: pluginModel,
-                            lifecycle: pluginLifecycle,
-                            rawModel: plg.source
-                        });
+                    } catch (e) {
+                        console.error(`Failed to initialize ${plg.model.id} plugin.`, e);
                     }
                 }
                 return [result, foreign];
             },
-            initExtApi(extApi: ExtPluginApi[]) {
+            initExtApi(extApi: ExtPluginApi[]): void {
                 for (const api of extApi) {
                     if (api.backendInitPath) {
                         try {
@@ -181,7 +222,7 @@ export class PluginHostRPC {
                     `Path ${extensionTestsPath} does not point to a valid extension test runner.`
                 );
             } : undefined
-        }, envExt, preferencesManager, rpc);
+        }, envExt, storageProxy, preferencesManager, webview, rpc);
         return pluginManager;
     }
 }

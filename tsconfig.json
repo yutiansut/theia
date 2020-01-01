@@ -16,9 +16,6 @@
       "@theia/core/lib/*": [
         "packages/core/src/*"
       ],
-      "@theia/extension-manager/lib/*": [
-        "packages/extension-manager/src/*"
-      ],
       "@theia/filesystem/lib/*": [
         "packages/filesystem/src/*"
       ],
@@ -51,9 +48,6 @@
       ],
       "@theia/monaco/lib/*": [
         "packages/monaco/src/*"
-      ],
-      "@theia/cpp/lib/*": [
-        "packages/cpp/src/*"
       ],
       "@theia/java/lib/*": [
         "packages/java/src/*"
@@ -103,14 +97,38 @@
       "@theia/editorconfig/lib/*": [
         "packages/editorconfig/src/*"
       ],
-      "@theia/bunyan/lib/*": [
-        "packages/bunyan/src/*"
-      ],
       "@theia/console/lib/*": [
         "packages/console/src/*"
       ],
+      "@theia/scm/lib/*": [
+        "packages/scm/src/*"
+      ],
       "@theia/getting-started/lib/*": [
         "packages/getting-started/src/*"
+      ],
+      "@theia/file-search/lib/*": [
+        "packages/file-search/src/*"
+      ],
+      "@theia/plugin-dev/lib/*": [
+        "packages/plugin-dev/src/*"
+      ],
+      "@theia/plugin-ext/lib/*": [
+        "packages/plugin-ext/src/*"
+      ],
+      "@theia/plugin-ext-vscode/lib/*": [
+        "packages/plugin-ext-vscode/src/*"
+      ],
+      "@theia/plugin-metrics/lib/*": [
+        "packages/plugin-metrics/src/*"
+      ],
+      "@theia/userstorage/lib/*": [
+        "packages/userstorage/src/*"
+      ],
+      "@theia/task/lib/*": [
+        "packages/task/src/*"
+      ],
+      "@theia/api-samples/lib/*": [
+        "examples/api-samples/src/*"
       ]
     },
     "plugins": [
@@ -122,6 +140,7 @@
   "include": [
     "dev-packages/*/src",
     "packages/*/src",
+    "examples/*/src",
     "examples/*/test"
   ]
 }

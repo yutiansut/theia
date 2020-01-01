@@ -16,6 +16,7 @@
 
 export * from './shell';
 export * from './frontend-application';
+export * from './keyboard';
 export * from './opener-service';
 export * from './browser';
 export * from './context-menu-renderer';
@@ -31,10 +32,10 @@ export * from './saveable';
 export * from './storage-service';
 export * from './preferences';
 export * from './keybinding';
-export * from './keys';
 export * from './status-bar';
 export * from './label-provider';
 export * from './widget-open-handler';
 export * from './navigatable';
 export * from './diff-uris';
 export * from './core-preferences';
+export * from './view-container';

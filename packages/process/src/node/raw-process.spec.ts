@@ -34,26 +34,32 @@ const track = temp.track();
 const expect = chai.expect;
 const FORK_TEST_FILE = path.join(__dirname, '../../src/node/test/process-fork-test.js');
 
-describe('RawProcess', function () {
+describe('RawProcess', function (): void {
 
-    this.timeout(5000);
+    this.timeout(20_000);
+
     let rawProcessFactory: RawProcessFactory;
 
     beforeEach(() => {
         rawProcessFactory = createProcessTestContainer().get<RawProcessFactory>(RawProcessFactory);
     });
 
-    it('test error on non-existent path', async function () {
+    after(() => {
+        track.cleanupSync();
+    });
+
+    it('test error on non-existent path', async function (): Promise<void> {
         const error = await new Promise<ProcessErrorEvent>((resolve, reject) => {
             const proc = rawProcessFactory({ command: '/non-existent' });
             proc.onStart(reject);
             proc.onError(resolve);
+            proc.onExit(reject);
         });
 
         expect(error.code).eq('ENOENT');
     });
 
-    it('test error on non-executable path', async function () {
+    it('test error on non-executable path', async function (): Promise<void> {
         // Create a non-executable file.
         const f = track.openSync('non-executable');
         fs.writeSync(f.fd, 'echo bob');
@@ -71,6 +77,7 @@ describe('RawProcess', function () {
             const proc = rawProcessFactory({ command: f.path });
             proc.onStart(reject);
             proc.onError(resolve);
+            proc.onExit(reject);
         });
 
         // On Windows, we get 'UNKNOWN'.
@@ -79,16 +86,17 @@ describe('RawProcess', function () {
         expect(error.code).eq(expectedCode);
     });
 
-    it('test start event', function () {
+    it('test start event', function (): Promise<IProcessStartEvent> {
         return new Promise<IProcessStartEvent>(async (resolve, reject) => {
             const args = ['-e', 'process.exit(3)'];
             const rawProcess = rawProcessFactory({ command: process.execPath, 'args': args });
             rawProcess.onStart(resolve);
             rawProcess.onError(reject);
+            rawProcess.onExit(reject);
         });
     });
 
-    it('test exit', async function () {
+    it('test exit', async function (): Promise<void> {
         const args = ['--version'];
         const rawProcess = rawProcessFactory({ command: process.execPath, 'args': args });
         const p = new Promise<number>((resolve, reject) => {
@@ -109,14 +117,14 @@ describe('RawProcess', function () {
         expect(exitCode).equal(0);
     });
 
-    it('test pipe stdout stream', async function () {
+    it('test pipe stdout stream', async function (): Promise<void> {
         const output = await new Promise<string>(async (resolve, reject) => {
             const args = ['-e', 'console.log("text to stdout")'];
             const outStream = new stream.PassThrough();
             const rawProcess = rawProcessFactory({ command: process.execPath, 'args': args });
             rawProcess.onError(reject);
 
-            rawProcess.output.pipe(outStream);
+            rawProcess.outputStream.pipe(outStream);
 
             let buf = '';
             outStream.on('data', data => {
@@ -130,14 +138,14 @@ describe('RawProcess', function () {
         expect(output).to.be.equal('text to stdout');
     });
 
-    it('test pipe stderr stream', async function () {
+    it('test pipe stderr stream', async function (): Promise<void> {
         const output = await new Promise<string>(async (resolve, reject) => {
             const args = ['-e', 'console.error("text to stderr")'];
             const outStream = new stream.PassThrough();
             const rawProcess = rawProcessFactory({ command: process.execPath, 'args': args });
             rawProcess.onError(reject);
 
-            rawProcess.errorOutput.pipe(outStream);
+            rawProcess.errorStream.pipe(outStream);
 
             let buf = '';
             outStream.on('data', data => {
@@ -151,7 +159,7 @@ describe('RawProcess', function () {
         expect(output).to.be.equal('text to stderr');
     });
 
-    it('test forked pipe stdout stream', async function () {
+    it('test forked pipe stdout stream', async function (): Promise<void> {
         const args = ['version'];
         const rawProcess = rawProcessFactory({ modulePath: FORK_TEST_FILE, args, options: { stdio: 'pipe' } });
 
@@ -167,12 +175,12 @@ describe('RawProcess', function () {
             });
         });
 
-        rawProcess.output.pipe(outStream);
+        rawProcess.outputStream.pipe(outStream);
 
         expect(await p).to.be.equal('1.0.0');
     });
 
-    it('test forked pipe stderr stream', async function () {
+    it('test forked pipe stderr stream', async function (): Promise<void> {
         const rawProcess = rawProcessFactory({ modulePath: FORK_TEST_FILE, args: [], options: { stdio: 'pipe' } });
 
         const outStream = new stream.PassThrough();
@@ -187,7 +195,7 @@ describe('RawProcess', function () {
             });
         });
 
-        rawProcess.errorOutput.pipe(outStream);
+        rawProcess.errorStream.pipe(outStream);
 
         expect(await p).to.have.string('Error');
     });

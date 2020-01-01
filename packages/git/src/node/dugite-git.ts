@@ -238,7 +238,7 @@ export namespace GitBlameParser {
         summary?: string,
     }
 
-    export function isUncommittedSha(sha: string | undefined) {
+    export function isUncommittedSha(sha: string | undefined): boolean {
         return (sha || '').startsWith('0000000');
     }
 
@@ -643,6 +643,9 @@ export class DugiteGit implements Git {
         if (options && options.branch) {
             args.push(options.branch);
         }
+        if (options && options.firstParent) {
+            args.push('--first-parent');
+        }
         const range = this.mapRange((options || {}).range);
         args.push(...[range, '-C', '-M', '-m']);
         const maxCount = options && options.maxCount ? options.maxCount : 0;
@@ -657,11 +660,37 @@ export class DugiteGit implements Git {
             const file = Path.relative(this.getFsPath(repository), this.getFsPath(options.uri)) || '.';
             args.push(...[file]);
         }
-        const result = await this.exec(repository, args);
+
+        const successExitCodes = new Set([0, 128]);
+        let result = await this.exec(repository, args, { successExitCodes });
+        if (result.exitCode !== 0) {
+            // Note that if no range specified then the 'to revision' defaults to HEAD
+            const rangeInvolvesHead = !options || !options.range || options.range.toRevision === 'HEAD';
+            const repositoryHasNoHead = !await this.revParse(repository, { ref: 'HEAD' });
+            // The 'log' command could potentially be valid when no HEAD if the revision range does not involve HEAD */
+            if (rangeInvolvesHead && repositoryHasNoHead) {
+                // The range involves HEAD but there is no HEAD.  'no head' most likely means a newly created repository with
+                // no commits, but could potentially have commits with no HEAD.  This is effectively an empty repository.
+                return [];
+            }
+            // Either the range did not involve HEAD or HEAD exists.  The error must be something else,
+            // so re-run but this time we don't ignore the error.
+            result = await this.exec(repository, args);
+        }
+
         return this.commitDetailsParser.parse(
             repository.localUri, result.stdout.trim()
                 .split(CommitDetailsParser.COMMIT_CHUNK_DELIMITER)
                 .filter(item => item && item.length > 0));
+    }
+
+    async revParse(repository: Repository, options: Git.Options.RevParse): Promise<string | undefined> {
+        const ref = options.ref;
+        const successExitCodes = new Set([0, 128]);
+        const result = await this.exec(repository, ['rev-parse', ref], { successExitCodes });
+        if (result.exitCode === 0) {
+            return result.stdout; // sha
+        }
     }
 
     async blame(repository: Repository, uri: string, options?: Git.Options.Blame): Promise<GitFileBlame | undefined> {
@@ -702,7 +731,8 @@ export class DugiteGit implements Git {
     async lsFiles(repository: Repository, uri: string, options?: Git.Options.LsFiles): Promise<any> {
         await this.ready.promise;
         const args = ['ls-files'];
-        const file = Path.relative(this.getFsPath(repository), this.getFsPath(uri));
+        const relativePath = Path.relative(this.getFsPath(repository), this.getFsPath(uri));
+        const file = (relativePath === '') ? '.' : relativePath;
         if (options && options.errorUnmatch) {
             args.push('--error-unmatch', file);
             const successExitCodes = new Set([0, 1]);
@@ -782,7 +812,7 @@ export class DugiteGit implements Git {
         return this.mapBranch(branch);
     }
 
-    private getResetMode(mode: 'hard' | 'soft' | 'mixed') {
+    private getResetMode(mode: 'hard' | 'soft' | 'mixed'): GitResetMode {
         switch (mode) {
             case 'hard': return GitResetMode.Hard;
             case 'soft': return GitResetMode.Soft;

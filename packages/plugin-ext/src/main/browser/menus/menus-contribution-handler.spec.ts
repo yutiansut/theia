@@ -26,74 +26,80 @@ import { MockMenuModelRegistry } from '@theia/core/lib/common/test/mock-menu';
 import { EDITOR_CONTEXT_MENU } from '@theia/editor/lib/browser';
 import { NAVIGATOR_CONTEXT_MENU } from '@theia/navigator/lib/browser/navigator-contribution';
 import { MenusContributionPointHandler } from './menus-contribution-handler';
-import 'mocha';
 import * as sinon from 'sinon';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { QuickCommandService } from '@theia/core/lib/browser';
 import { PluginSharedStyle } from '../plugin-shared-style';
 import { TabBarToolbarRegistry } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
+import { ScmService } from '@theia/scm/lib/browser/scm-service';
+import { ResourceContextKey } from '@theia/core/lib/browser/resource-context-key';
 
 disableJSDOM();
 
-let testContainer: Container;
-let handler: MenusContributionPointHandler;
+// TODO: enable tests once the https://github.com/eclipse-theia/theia/issues/3344 is fixed
+describe.skip('MenusContributionHandler', () => {
 
-let notificationWarnSpy: sinon.SinonSpy;
-let registerMenuSpy: sinon.SinonSpy;
-let registerCmdHandlerSpy: sinon.SinonSpy;
-let loggerWarnSpy: sinon.SinonSpy;
+    let testContainer: Container;
+    let handler: MenusContributionPointHandler;
 
-const testCommandId = 'core.about';
+    let notificationWarnSpy: sinon.SinonSpy;
+    let registerMenuSpy: sinon.SinonSpy;
+    let registerCmdHandlerSpy: sinon.SinonSpy;
+    let loggerWarnSpy: sinon.SinonSpy;
 
-before(() => {
-    testContainer = new Container();
+    const testCommandId = 'core.about';
 
-    const module = new ContainerModule((bind, unbind, isBound, rebind) => {
-        bind(ILogger).to(MockLogger).inSingletonScope();
-        bind(MessageClient).toSelf().inSingletonScope();
-        bind(MessageService).toSelf().inSingletonScope();
-        bind(MenuModelRegistry).toConstantValue(new MockMenuModelRegistry());
-        bindContributionProvider(bind, CommandContribution);
-        bind(CommandRegistry).toSelf().inSingletonScope();
-        bind(ContextKeyService).toSelf().inSingletonScope();
-        bind(MenusContributionPointHandler).toSelf();
-        // tslint:disable-next-line:no-any mock QuickCommandService
-        bind(QuickCommandService).toConstantValue({} as any);
-        // tslint:disable-next-line:no-any mock TabBarToolbarRegistry
-        bind(TabBarToolbarRegistry).toConstantValue({} as any);
-        // tslint:disable-next-line:no-any mock PluginSharedStyle
-        bind(PluginSharedStyle).toConstantValue({} as any);
-        bind(SelectionService).toSelf().inSingletonScope();
+    before(() => {
+        testContainer = new Container();
+
+        const module = new ContainerModule((bind, unbind, isBound, rebind) => {
+            bind(ILogger).to(MockLogger).inSingletonScope();
+            bind(MessageClient).toSelf().inSingletonScope();
+            bind(MessageService).toSelf().inSingletonScope();
+            bind(MenuModelRegistry).toConstantValue(new MockMenuModelRegistry());
+            bindContributionProvider(bind, CommandContribution);
+            bind(CommandRegistry).toSelf().inSingletonScope();
+            bind(ContextKeyService).toSelf().inSingletonScope();
+            bind(MenusContributionPointHandler).toSelf();
+            // tslint:disable-next-line:no-any mock QuickCommandService
+            bind(QuickCommandService).toConstantValue({} as any);
+            // tslint:disable-next-line:no-any mock TabBarToolbarRegistry
+            bind(TabBarToolbarRegistry).toConstantValue({} as any);
+            // tslint:disable-next-line:no-any mock PluginSharedStyle
+            bind(PluginSharedStyle).toConstantValue({} as any);
+            bind(SelectionService).toSelf().inSingletonScope();
+            // tslint:disable-next-line:no-any mock ScmService
+            bind(ScmService).toConstantValue({} as any);
+            // tslint:disable-next-line:no-any mock ScmService
+            bind(ResourceContextKey).toConstantValue({} as any);
+        });
+
+        testContainer.load(module);
     });
 
-    testContainer.load(module);
-});
+    beforeEach(() => {
+        handler = testContainer.get(MenusContributionPointHandler);
 
-beforeEach(() => {
-    handler = testContainer.get(MenusContributionPointHandler);
+        const logger = testContainer.get<ILogger>(ILogger);
+        loggerWarnSpy = sinon.spy(logger, 'warn');
 
-    const logger = testContainer.get<ILogger>(ILogger);
-    loggerWarnSpy = sinon.spy(logger, 'warn');
+        const messageService = testContainer.get(MessageService);
+        notificationWarnSpy = sinon.spy(messageService, 'warn');
 
-    const messageService = testContainer.get(MessageService);
-    notificationWarnSpy = sinon.spy(messageService, 'warn');
+        const menuRegistry = testContainer.get(MenuModelRegistry);
+        registerMenuSpy = sinon.spy(menuRegistry, 'registerMenuAction');
 
-    const menuRegistry = testContainer.get(MenuModelRegistry);
-    registerMenuSpy = sinon.spy(menuRegistry, 'registerMenuAction');
+        const commandRegistry = testContainer.get(CommandRegistry);
+        registerCmdHandlerSpy = sinon.spy(commandRegistry, 'registerHandler');
+    });
 
-    const commandRegistry = testContainer.get(CommandRegistry);
-    registerCmdHandlerSpy = sinon.spy(commandRegistry, 'registerHandler');
-});
+    afterEach(function (): void {
+        notificationWarnSpy.restore();
+        registerMenuSpy.restore();
+        registerCmdHandlerSpy.restore();
+        loggerWarnSpy.restore();
+    });
 
-afterEach(function () {
-    notificationWarnSpy.restore();
-    registerMenuSpy.restore();
-    registerCmdHandlerSpy.restore();
-    loggerWarnSpy.restore();
-});
-
-// TODO: enable tests once the https://github.com/theia-ide/theia/issues/3344 is fixed
-describe.skip('MenusContributionHandler', () => {
     describe('should register an item in the supported menus', () => {
         it('editor context menu', () => {
             handler.handle({
@@ -166,7 +172,7 @@ describe.skip('MenusContributionHandler', () => {
         sinon.assert.called(loggerWarnSpy);
     });
 
-    function assertItemIsRegistered(menuPath: MenuPath, menuGroup: string = '', order?: string) {
+    function assertItemIsRegistered(menuPath: MenuPath, menuGroup: string = '', order?: string): void {
         sinon.assert.calledWithExactly(registerMenuSpy,
             [...menuPath, menuGroup],
             <MenuAction>{

@@ -17,7 +17,8 @@
 import { inject, injectable } from 'inversify';
 import {
     QuickOpenModel, QuickOpenItem, QuickOpenMode, PrefixQuickOpenService,
-    OpenerService, KeybindingRegistry, QuickOpenGroupItem, QuickOpenGroupItemOptions, QuickOpenItemOptions, QuickOpenHandler, QuickOpenOptions, Keybinding
+    OpenerService, KeybindingRegistry, QuickOpenGroupItem, QuickOpenGroupItemOptions, QuickOpenItemOptions,
+    QuickOpenHandler, QuickOpenOptions
 } from '@theia/core/lib/browser';
 import { FileSystem } from '@theia/filesystem/lib/common/filesystem';
 import { WorkspaceService } from '@theia/workspace/lib/browser/workspace-service';
@@ -131,7 +132,7 @@ export class QuickFileOpenService implements QuickOpenModel, QuickOpenHandler {
         const keyCommand = this.keybindingRegistry.getKeybindingsForCommand(quickFileOpen.id);
         if (keyCommand) {
             // We only consider the first keybinding.
-            const accel = Keybinding.acceleratorFor(keyCommand[0], '+');
+            const accel = this.keybindingRegistry.acceleratorFor(keyCommand[0], '+');
             return accel.join(' ');
         }
 
@@ -158,10 +159,7 @@ export class QuickFileOpenService implements QuickOpenModel, QuickOpenHandler {
         for (const location of locations) {
             const uriString = location.uri.toString();
             if (location.uri.scheme === 'file' && !alreadyCollected.has(uriString) && fuzzy.test(lookFor, uriString)) {
-                const item = await this.toItem(location.uri, { groupLabel: recentlyUsedItems.length === 0 ? 'recently opened' : undefined, showBorder: false });
-                if (token.isCancellationRequested) {
-                    return;
-                }
+                const item = this.toItem(location.uri, { groupLabel: recentlyUsedItems.length === 0 ? 'recently opened' : undefined, showBorder: false });
                 recentlyUsedItems.push(item);
                 alreadyCollected.add(uriString);
             }
@@ -174,10 +172,7 @@ export class QuickFileOpenService implements QuickOpenModel, QuickOpenHandler {
                 const fileSearchResultItems: QuickOpenItem[] = [];
                 for (const fileUri of results) {
                     if (!alreadyCollected.has(fileUri)) {
-                        const item = await this.toItem(fileUri);
-                        if (token.isCancellationRequested) {
-                            return;
-                        }
+                        const item = this.toItem(fileUri);
                         fileSearchResultItems.push(item);
                         alreadyCollected.add(fileUri);
                     }
@@ -191,10 +186,7 @@ export class QuickFileOpenService implements QuickOpenModel, QuickOpenHandler {
                 const first = sortedResults[0];
                 sortedResults.shift();
                 if (first) {
-                    const item = await this.toItem(first.getUri()!, { groupLabel: 'file results', showBorder: true });
-                    if (token.isCancellationRequested) {
-                        return;
-                    }
+                    const item = this.toItem(first.getUri()!, { groupLabel: 'file results', showBorder: !!recentlyUsedItems.length });
                     sortedResults.unshift(item);
                 }
                 // Return the recently used items, followed by the search results.
@@ -205,13 +197,14 @@ export class QuickFileOpenService implements QuickOpenModel, QuickOpenHandler {
                 fuzzyMatch: true,
                 limit: 200,
                 useGitIgnore: this.hideIgnoredFiles,
+                excludePatterns: ['*.git*']
             }, token).then(handler);
         } else {
             acceptor(recentlyUsedItems);
         }
     }
 
-    protected getRunFunction(uri: URI) {
+    protected getRunFunction(uri: URI): (mode: QuickOpenMode) => boolean {
         return (mode: QuickOpenMode) => {
             if (mode !== QuickOpenMode.OPEN) {
                 return false;
@@ -239,7 +232,7 @@ export class QuickFileOpenService implements QuickOpenModel, QuickOpenHandler {
          * @param str the raw string value.
          * @returns the normalized string value.
          */
-        function normalize(str: string) {
+        function normalize(str: string): string {
             return str.trim().toLowerCase();
         }
 
@@ -314,20 +307,22 @@ export class QuickFileOpenService implements QuickOpenModel, QuickOpenHandler {
             .catch(error => this.messageService.error(error));
     }
 
-    private async toItem(uriOrString: URI | string, group?: QuickOpenGroupItemOptions) {
+    private toItem(uriOrString: URI | string, group?: QuickOpenGroupItemOptions): QuickOpenItem<QuickOpenItemOptions> {
         const uri = uriOrString instanceof URI ? uriOrString : new URI(uriOrString);
         let description = this.labelProvider.getLongName(uri.parent);
-        if (this.workspaceService.workspace && !this.workspaceService.workspace.isDirectory) {
+        if (this.workspaceService.isMultiRootWorkspaceOpened) {
             const rootUri = this.workspaceService.getWorkspaceRootUri(uri);
             if (rootUri) {
                 description = `${rootUri.displayName} • ${description}`;
             }
         }
+        const icon = this.labelProvider.getIcon(uri);
+        const iconClass = icon === '' ? undefined : icon + ' file-icon';
         const options: QuickOpenItemOptions = {
             label: this.labelProvider.getName(uri),
-            iconClass: await this.labelProvider.getIcon(uri) + ' file-icon',
+            iconClass,
             description,
-            tooltip: uri.path.toString(),
+            tooltip: this.labelProvider.getLongName(uri),
             uri: uri,
             hidden: false,
             run: this.getRunFunction(uri)

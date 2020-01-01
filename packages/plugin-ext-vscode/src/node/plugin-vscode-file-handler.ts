@@ -16,8 +16,9 @@
 
 import { PluginDeployerFileHandler, PluginDeployerEntry, PluginDeployerFileHandlerContext } from '@theia/plugin-ext';
 import { injectable } from 'inversify';
+import * as fs from 'fs-extra';
 import * as path from 'path';
-import { getTempDir } from '@theia/plugin-ext';
+import { getTempDir } from '@theia/plugin-ext/lib/main/node/temp-dir-util';
 
 @injectable()
 export class PluginVsCodeFileHandler implements PluginDeployerFileHandler {
@@ -36,11 +37,17 @@ export class PluginVsCodeFileHandler implements PluginDeployerFileHandler {
     }
 
     async handle(context: PluginDeployerFileHandlerContext): Promise<void> {
-        // need to unzip
-        console.log('unzipping the plugin', context.pluginEntry());
-
         const unpackedPath = path.resolve(this.unpackedFolder, path.basename(context.pluginEntry().path()));
+        console.log(`unzipping the VS Code extension '${path.basename(context.pluginEntry().path())}' to directory: ${unpackedPath}`);
+
         await context.unzip(context.pluginEntry().path(), unpackedPath);
+        if (context.pluginEntry().path().endsWith('.tgz')) {
+            const extensionPath = path.join(unpackedPath, 'package');
+            const vscodeNodeModulesPath = path.join(extensionPath, 'vscode_node_modules.zip');
+            if (await fs.pathExists(vscodeNodeModulesPath)) {
+                await context.unzip(vscodeNodeModulesPath, path.join(extensionPath, 'node_modules'));
+            }
+        }
 
         context.pluginEntry().updatePath(unpackedPath);
         return Promise.resolve();

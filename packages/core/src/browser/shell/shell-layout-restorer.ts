@@ -14,15 +14,17 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { injectable, inject } from 'inversify';
+import { injectable, inject, named } from 'inversify';
 import { Widget } from '@phosphor/widgets';
 import { FrontendApplication } from '../frontend-application';
 import { WidgetManager, WidgetConstructionOptions } from '../widget-manager';
 import { StorageService } from '../storage-service';
 import { ILogger } from '../../common/logger';
-import { CommandContribution, CommandRegistry } from '../../common/command';
-import { ApplicationShell } from './application-shell';
+import { CommandContribution, CommandRegistry, Command } from '../../common/command';
 import { ThemeService } from '../theming';
+import { ContributionProvider } from '../../common/contribution-provider';
+import { MaybePromise } from '../../common/types';
+import { ApplicationShell, applicationShellLayoutVersion, ApplicationShellLayoutVersion } from './application-shell';
 
 /**
  * A contract for widgets that want to store and restore their inner state, between sessions.
@@ -47,15 +49,80 @@ export namespace StatefulWidget {
     }
 }
 
-interface WidgetDescription {
+export interface WidgetDescription {
     constructionOptions: WidgetConstructionOptions,
-    innerWidgetState?: object
+    innerWidgetState?: string | object
 }
+
+export interface ApplicationShellLayoutMigrationContext {
+    /**
+     * A resolved version of a current layout.
+     */
+    layoutVersion: number
+    /**
+     * A layout to be inflated.
+     */
+    layout: ApplicationShell.LayoutData
+    /**
+     * A parent widget is to be inflated. `undefined` if the application shell
+     */
+    parent?: Widget
+}
+
+export interface ApplicationShellLayoutMigrationError extends Error {
+    code: 'ApplicationShellLayoutMigrationError'
+}
+export namespace ApplicationShellLayoutMigrationError {
+    const code: ApplicationShellLayoutMigrationError['code'] = 'ApplicationShellLayoutMigrationError';
+    export function create(message?: string): ApplicationShellLayoutMigrationError {
+        return Object.assign(new Error(
+            `Could not migrate layout to version ${applicationShellLayoutVersion}.` + (message ? '\n' + message : '')
+        ), { code });
+    }
+    export function is(error: Error | undefined): error is ApplicationShellLayoutMigrationError {
+        return !!error && 'code' in error && error['code'] === code;
+    }
+}
+
+export const ApplicationShellLayoutMigration = Symbol('ApplicationShellLayoutMigration');
+export interface ApplicationShellLayoutMigration {
+    /**
+     * A target migration version.
+     */
+    readonly layoutVersion: ApplicationShellLayoutVersion;
+
+    /**
+     * A migration can transform layout before it will be inflated.
+     *
+     * @throws `ApplicationShellLayoutMigrationError` if a layout cannot be migrated,
+     * in this case the default layout will be initialized.
+     */
+    onWillInflateLayout?(context: ApplicationShellLayoutMigrationContext): MaybePromise<void>;
+
+    /**
+     * A migration can transform the given description before it will be inflated.
+     *
+     * @returns a migrated widget description, or `undefined`
+     * @throws `ApplicationShellLayoutMigrationError` if a widget description cannot be migrated,
+     * in this case the default layout will be initialized.
+     */
+    onWillInflateWidget?(desc: WidgetDescription, context: ApplicationShellLayoutMigrationContext): MaybePromise<WidgetDescription | undefined>;
+}
+
+export const RESET_LAYOUT: Command = {
+    id: 'reset.layout',
+    category: 'View',
+    label: 'Reset Workbench Layout'
+};
 
 @injectable()
 export class ShellLayoutRestorer implements CommandContribution {
-    private storageKey = 'layout';
-    private shouldStoreLayout: boolean = true;
+
+    protected storageKey = 'layout';
+    protected shouldStoreLayout: boolean = true;
+
+    @inject(ContributionProvider) @named(ApplicationShellLayoutMigration)
+    protected readonly migrations: ContributionProvider<ApplicationShellLayoutMigration>;
 
     constructor(
         @inject(WidgetManager) protected widgetManager: WidgetManager,
@@ -63,26 +130,28 @@ export class ShellLayoutRestorer implements CommandContribution {
         @inject(StorageService) protected storageService: StorageService) { }
 
     registerCommands(commands: CommandRegistry): void {
-        commands.registerCommand({
-            id: 'reset.layout',
-            category: 'View',
-            label: 'Reset Workbench Layout'
-        }, {
-                execute: async () => {
-                    this.shouldStoreLayout = false;
-                    this.storageService.setData(this.storageKey, undefined);
-                    ThemeService.get().reset(); // Theme service cannot use DI, so the current theme ID is stored elsewhere. Hence the explicit reset.
-                    window.location.reload(true);
-                }
-            });
+        commands.registerCommand(RESET_LAYOUT, {
+            execute: async () => this.resetLayout()
+        });
+    }
+
+    protected async resetLayout(): Promise<void> {
+        this.logger.info('>>> Resetting layout...');
+        this.shouldStoreLayout = false;
+        this.storageService.setData(this.storageKey, undefined);
+        ThemeService.get().reset(); // Theme service cannot use DI, so the current theme ID is stored elsewhere. Hence the explicit reset.
+        this.logger.info('<<< The layout has been successfully reset.');
+        window.location.reload(true);
     }
 
     storeLayout(app: FrontendApplication): void {
         if (this.shouldStoreLayout) {
             try {
+                this.logger.info('>>> Storing the layout...');
                 const layoutData = app.shell.getLayoutData();
                 const serializedLayoutData = this.deflate(layoutData);
                 this.storageService.setData(this.storageKey, serializedLayoutData);
+                this.logger.info('<<< The layout has been successfully stored.');
             } catch (error) {
                 this.storageService.setData(this.storageKey, undefined);
                 this.logger.error('Error during serialization of layout data', error);
@@ -91,27 +160,30 @@ export class ShellLayoutRestorer implements CommandContribution {
     }
 
     async restoreLayout(app: FrontendApplication): Promise<boolean> {
+        this.logger.info('>>> Restoring the layout state...');
         const serializedLayoutData = await this.storageService.getData<string>(this.storageKey);
         if (serializedLayoutData === undefined) {
+            this.logger.info('<<< Nothing to restore.');
             return false;
         }
         const layoutData = await this.inflate(serializedLayoutData);
         await app.shell.setLayoutData(layoutData);
+        this.logger.info('<<< The layout has been successfully restored.');
         return true;
     }
 
-    protected isWidgetProperty(propertyName: string) {
+    protected isWidgetProperty(propertyName: string): boolean {
         return propertyName === 'widget';
     }
 
-    protected isWidgetsProperty(propertyName: string) {
+    protected isWidgetsProperty(propertyName: string): boolean {
         return propertyName === 'widgets';
     }
 
     /**
      * Turns the layout data to a string representation.
      */
-    protected deflate(data: ApplicationShell.LayoutData): string {
+    protected deflate(data: object): string {
         return JSON.stringify(data, (property: string, value) => {
             if (this.isWidgetProperty(property)) {
                 const description = this.convertToDescription(value as Widget);
@@ -139,7 +211,7 @@ export class ShellLayoutRestorer implements CommandContribution {
             }
             return {
                 constructionOptions: desc,
-                innerWidgetState: innerState
+                innerWidgetState: innerState && this.deflate(innerState)
             };
         }
     }
@@ -147,18 +219,58 @@ export class ShellLayoutRestorer implements CommandContribution {
     /**
      * Creates the layout data from its string representation.
      */
-    protected inflate(layoutData: string): Promise<ApplicationShell.LayoutData> {
-        const pending: Promise<Widget | undefined>[] = [];
-        const result = JSON.parse(layoutData, (property: string, value) => {
+    protected async inflate(layoutData: string): Promise<ApplicationShell.LayoutData> {
+        const parseContext = new ShellLayoutRestorer.ParseContext();
+        const layout = this.parse<ApplicationShell.LayoutData>(layoutData, parseContext);
+
+        // tslint:disable-next-line:no-any
+        let layoutVersion: number | any;
+        try {
+            layoutVersion = 'version' in layout && Number(layout.version);
+        } catch { /* no-op */ }
+        if (typeof layoutVersion !== 'number' || Number.isNaN(layoutVersion)) {
+            throw new Error('could not resolve a layout version');
+        }
+        if (layoutVersion !== applicationShellLayoutVersion) {
+            if (layoutVersion < applicationShellLayoutVersion) {
+                console.warn(`Layout version ${layoutVersion} is behind current layout version ${applicationShellLayoutVersion}, trying to migrate...`);
+            } else {
+                console.warn(`Layout version ${layoutVersion} is ahead current layout version ${applicationShellLayoutVersion}, trying to load anyway...`);
+            }
+            console.info(`Please use '${RESET_LAYOUT.label}' command if the layout looks bogus.`);
+        }
+
+        const migrations = this.migrations.getContributions()
+            .filter(m => m.layoutVersion > layoutVersion && m.layoutVersion <= applicationShellLayoutVersion)
+            .sort((m, m2) => m.layoutVersion - m2.layoutVersion);
+        if (migrations.length) {
+            console.info(`Found ${migrations.length} migrations from layout version ${layoutVersion} to version ${applicationShellLayoutVersion}, migrating...`);
+        }
+
+        const context = { layout, layoutVersion, migrations };
+        await this.fireWillInflateLayout(context);
+        await parseContext.inflate(context);
+        return layout;
+    }
+
+    protected async fireWillInflateLayout(context: ShellLayoutRestorer.InflateContext): Promise<void> {
+        for (const migration of context.migrations) {
+            if (migration.onWillInflateLayout) {
+                // don't catch exceptions, if one migration fails all should fail.
+                await migration.onWillInflateLayout(context);
+            }
+        }
+    }
+
+    protected parse<T>(layoutData: string, parseContext: ShellLayoutRestorer.ParseContext): T {
+        return JSON.parse(layoutData, (property: string, value) => {
             if (this.isWidgetsProperty(property)) {
                 const widgets: (Widget | undefined)[] = [];
                 const descs = (value as WidgetDescription[]);
                 for (let i = 0; i < descs.length; i++) {
-                    const promise = this.convertToWidget(descs[i]);
-                    pending.push(promise.then(widget => {
-                        widgets[i] = widget;
-                        return widget;
-                    }));
+                    parseContext.push(async context => {
+                        widgets[i] = await this.convertToWidget(descs[i], context);
+                    });
                 }
                 return widgets;
             } else if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -166,11 +278,9 @@ export class ShellLayoutRestorer implements CommandContribution {
                 const copy: any = {};
                 for (const p in value) {
                     if (this.isWidgetProperty(p)) {
-                        const promise = this.convertToWidget(value[p]);
-                        pending.push(promise.then(widget => {
-                            copy[p] = widget;
-                            return widget;
-                        }));
+                        parseContext.push(async context => {
+                            copy[p] = await this.convertToWidget(value[p], context);
+                        });
                     } else {
                         copy[p] = value[p];
                     }
@@ -179,28 +289,82 @@ export class ShellLayoutRestorer implements CommandContribution {
             }
             return value;
         });
-        return Promise.all(pending).then(() => result);
     }
 
-    private convertToWidget(desc: WidgetDescription): Promise<Widget | undefined> {
-        if (desc.constructionOptions) {
-            return this.widgetManager.getOrCreateWidget(desc.constructionOptions.factoryId, desc.constructionOptions.options)
-                .then(widget => {
-                    if (StatefulWidget.is(widget) && desc.innerWidgetState !== undefined) {
-                        try {
-                            widget.restoreState(desc.innerWidgetState);
-                        } catch (err) {
-                            this.logger.warn(`Couldn't restore widget state for ${widget.id}. Error: ${err} `);
-                        }
+    protected async fireWillInflateWidget(desc: WidgetDescription, context: ShellLayoutRestorer.InflateContext): Promise<WidgetDescription> {
+        for (const migration of context.migrations) {
+            if (migration.onWillInflateWidget) {
+                // don't catch exceptions, if one migration fails all should fail.
+                const migrated = await migration.onWillInflateWidget(desc, context);
+                if (migrated) {
+                    if (migrated.innerWidgetState && typeof migrated.innerWidgetState !== 'string') {
+                        // in order to inflate nested widgets
+                        migrated.innerWidgetState = JSON.stringify(migrated.innerWidgetState);
                     }
-                    return widget;
-                }, err => {
-                    this.logger.warn(`Couldn't restore widget for ${desc.constructionOptions.factoryId}. Error: ${err} `);
-                    return undefined;
-                });
-        } else {
-            return Promise.resolve(undefined);
+                    desc = migrated;
+                }
+            }
+        }
+        return desc;
+    }
+
+    protected async convertToWidget(desc: WidgetDescription, context: ShellLayoutRestorer.InflateContext): Promise<Widget | undefined> {
+        if (!desc.constructionOptions) {
+            return undefined;
+        }
+        try {
+            desc = await this.fireWillInflateWidget(desc, context);
+            const widget = await this.widgetManager.getOrCreateWidget(desc.constructionOptions.factoryId, desc.constructionOptions.options);
+            if (StatefulWidget.is(widget) && desc.innerWidgetState !== undefined) {
+                try {
+                    let oldState: object;
+                    if (typeof desc.innerWidgetState === 'string') {
+                        const parseContext = new ShellLayoutRestorer.ParseContext();
+                        oldState = this.parse(desc.innerWidgetState, parseContext);
+                        await parseContext.inflate({ ...context, parent: widget });
+                    } else {
+                        oldState = desc.innerWidgetState;
+                    }
+                    widget.restoreState(oldState);
+                } catch (e) {
+                    if (ApplicationShellLayoutMigrationError.is(e)) {
+                        throw e;
+                    }
+                    this.logger.warn(`Couldn't restore widget state for ${widget.id}. Error: ${e} `);
+                }
+            }
+            if (widget.isDisposed) {
+                return undefined;
+            }
+            return widget;
+        } catch (e) {
+            if (ApplicationShellLayoutMigrationError.is(e)) {
+                throw e;
+            }
+            this.logger.warn(`Couldn't restore widget for ${desc.constructionOptions.factoryId}. Error: ${e} `);
+            return undefined;
         }
     }
 
+}
+export namespace ShellLayoutRestorer {
+    export class ParseContext {
+        protected readonly toInflate: Inflate[] = [];
+
+        push(toInflate: Inflate): void {
+            this.toInflate.push(toInflate);
+        }
+
+        async inflate(context: InflateContext): Promise<void> {
+            const pending: Promise<void>[] = [];
+            while (this.toInflate.length) {
+                pending.push(this.toInflate.pop()!(context));
+            }
+            await Promise.all(pending);
+        }
+    }
+    export type Inflate = (context: InflateContext) => Promise<void>;
+    export interface InflateContext extends ApplicationShellLayoutMigrationContext {
+        readonly migrations: ApplicationShellLayoutMigration[];
+    }
 }

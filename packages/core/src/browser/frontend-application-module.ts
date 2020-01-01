@@ -15,6 +15,7 @@
  ********************************************************************************/
 
 import '../../src/browser/style/index.css';
+require('../../src/browser/style/materialcolors.css').use();
 import 'font-awesome/css/font-awesome.min.css';
 import 'file-icons-js/css/style.css';
 
@@ -22,10 +23,9 @@ import { ContainerModule } from 'inversify';
 import {
     bindContributionProvider,
     SelectionService,
-    ResourceProvider, ResourceResolver, DefaultResourceProvider,
+    ResourceResolver,
     CommandContribution, CommandRegistry, CommandService, commandServicePath,
     MenuModelRegistry, MenuContribution,
-    MessageService,
     MessageClient,
     InMemoryResources,
     messageServicePath
@@ -46,23 +46,20 @@ import {
     ApplicationShell, ApplicationShellOptions, DockPanelRenderer, TabBarRenderer,
     TabBarRendererFactory, ShellLayoutRestorer,
     SidePanelHandler, SidePanelHandlerFactory,
-    SplitPositionHandler, DockPanelRendererFactory
+    SplitPositionHandler, DockPanelRendererFactory, ApplicationShellLayoutMigration, ApplicationShellLayoutMigrationError
 } from './shell';
 import { StatusBar, StatusBarImpl } from './status-bar/status-bar';
 import { LabelParser } from './label-parser';
 import { LabelProvider, LabelProviderContribution, DefaultUriLabelProviderContribution } from './label-provider';
-import {
-    PreferenceProviderProvider, PreferenceProvider, PreferenceScope, PreferenceService,
-    PreferenceServiceImpl, bindPreferenceSchemaProvider, PreferenceSchemaProvider
-} from './preferences';
+import { PreferenceService } from './preferences';
 import { ContextMenuRenderer } from './context-menu-renderer';
-import { ThemingCommandContribution, ThemeService, BuiltinThemeProvider } from './theming';
+import { ThemeService, BuiltinThemeProvider } from './theming';
 import { ConnectionStatusService, FrontendConnectionStatusService, ApplicationConnectionStatusContribution, PingService } from './connection-status-service';
 import { DiffUriLabelProviderContribution } from './diff-uris';
 import { ApplicationServer, applicationPath } from '../common/application-protocol';
 import { WebSocketConnectionProvider } from './messaging';
 import { AboutDialog, AboutDialogProps } from './about-dialog';
-import { EnvVariablesServer, envVariablesPath } from './../common/env-variables';
+import { EnvVariablesServer, envVariablesPath, EnvVariable } from './../common/env-variables';
 import { FrontendApplicationStateService } from './frontend-application-state';
 import { JsonSchemaStore } from './json-schema-store';
 import { TabBarToolbarRegistry, TabBarToolbarContribution, TabBarToolbarFactory, TabBarToolbar } from './shell/tab-bar-toolbar';
@@ -71,11 +68,50 @@ import { QuickPickServiceImpl } from './quick-open/quick-pick-service-impl';
 import { QuickPickService, quickPickServicePath } from '../common/quick-pick-service';
 import { ContextKeyService } from './context-key-service';
 import { ResourceContextKey } from './resource-context-key';
+import { KeyboardLayoutService } from './keyboard/keyboard-layout-service';
+import { MimeService } from './mime-service';
+import { ApplicationShellMouseTracker } from './shell/application-shell-mouse-tracker';
+import { ViewContainer, ViewContainerIdentifier } from './view-container';
+import { QuickViewService } from './quick-view-service';
+import { QuickTitleBar } from './quick-open/quick-title-bar';
+import { DialogOverlayService } from './dialogs';
+import { ProgressLocationService } from './progress-location-service';
+import { ProgressClient } from '../common/progress-service-protocol';
+import { ProgressService } from '../common/progress-service';
+import { DispatchingProgressClient } from './progress-client';
+import { ProgressStatusBarItem } from './progress-status-bar-item';
+import { TabBarDecoratorService, TabBarDecorator } from './shell/tab-bar-decorator';
+import { ContextMenuContext } from './menu/context-menu-context';
+import { bindResourceProvider, bindMessageService, bindPreferenceService } from './frontend-application-bindings';
+import { ColorRegistry } from './color-registry';
+import { ColorContribution, ColorApplicationContribution } from './color-application-contribution';
+import { ExternalUriService } from './external-uri-service';
+import { IconThemeService, NoneIconTheme } from './icon-theme-service';
+import { IconThemeApplicationContribution, IconThemeContribution, DefaultFileIconThemeContribution } from './icon-theme-contribution';
+import { TreeLabelProvider } from './tree/tree-label-provider';
+
+export { bindResourceProvider, bindMessageService, bindPreferenceService };
+
+ColorApplicationContribution.initBackground();
 
 export const frontendApplicationModule = new ContainerModule((bind, unbind, isBound, rebind) => {
     const themeService = ThemeService.get();
     themeService.register(...BuiltinThemeProvider.themes);
     themeService.startupTheme();
+
+    bind(NoneIconTheme).toSelf().inSingletonScope();
+    bind(LabelProviderContribution).toService(NoneIconTheme);
+    bind(IconThemeService).toSelf().inSingletonScope();
+    bindContributionProvider(bind, IconThemeContribution);
+    bind(DefaultFileIconThemeContribution).toSelf().inSingletonScope();
+    bind(IconThemeContribution).toService(DefaultFileIconThemeContribution);
+    bind(IconThemeApplicationContribution).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(IconThemeApplicationContribution);
+
+    bind(ColorRegistry).toSelf().inSingletonScope();
+    bindContributionProvider(bind, ColorContribution);
+    bind(ColorApplicationContribution).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(ColorApplicationContribution);
 
     bind(FrontendApplication).toSelf().inSingletonScope();
     bind(FrontendApplicationStateService).toSelf().inSingletonScope();
@@ -92,10 +128,9 @@ export const frontendApplicationModule = new ContainerModule((bind, unbind, isBo
     bind(TabBarToolbarRegistry).toSelf().inSingletonScope();
     bind(FrontendApplicationContribution).toService(TabBarToolbarRegistry);
     bind(TabBarToolbarFactory).toFactory(context => () => {
-        const { container } = context;
-        const commandRegistry = container.get(CommandRegistry);
-        const labelParser = container.get(LabelParser);
-        return new TabBarToolbar(commandRegistry, labelParser);
+        const container = context.container.createChild();
+        container.bind(TabBarToolbar).toSelf().inSingletonScope();
+        return container.get(TabBarToolbar);
     });
 
     bind(DockPanelRendererFactory).toFactory(context => () => {
@@ -108,25 +143,38 @@ export const frontendApplicationModule = new ContainerModule((bind, unbind, isBo
     bind(DockPanelRenderer).toSelf();
     bind(TabBarRendererFactory).toFactory(context => () => {
         const contextMenuRenderer = context.container.get<ContextMenuRenderer>(ContextMenuRenderer);
-        return new TabBarRenderer(contextMenuRenderer);
+        const decoratorService = context.container.get<TabBarDecoratorService>(TabBarDecoratorService);
+        const iconThemeService = context.container.get<IconThemeService>(IconThemeService);
+        return new TabBarRenderer(contextMenuRenderer, decoratorService, iconThemeService);
     });
+
+    bindContributionProvider(bind, TabBarDecorator);
+    bind(TabBarDecoratorService).toSelf().inSingletonScope();
 
     bindContributionProvider(bind, OpenHandler);
     bind(DefaultOpenerService).toSelf().inSingletonScope();
     bind(OpenerService).toService(DefaultOpenerService);
+
+    bind(ExternalUriService).toSelf().inSingletonScope();
     bind(HttpOpenHandler).toSelf().inSingletonScope();
     bind(OpenHandler).toService(HttpOpenHandler);
+
+    bindContributionProvider(bind, ApplicationShellLayoutMigration);
+    bind<ApplicationShellLayoutMigration>(ApplicationShellLayoutMigration).toConstantValue({
+        layoutVersion: 2.0,
+        onWillInflateLayout({ layoutVersion }): void {
+            throw ApplicationShellLayoutMigrationError.create(
+                `It is not possible to migrate layout of version ${layoutVersion} to version ${this.layoutVersion}.`
+            );
+        }
+    });
 
     bindContributionProvider(bind, WidgetFactory);
     bind(WidgetManager).toSelf().inSingletonScope();
     bind(ShellLayoutRestorer).toSelf().inSingletonScope();
     bind(CommandContribution).toService(ShellLayoutRestorer);
 
-    bind(DefaultResourceProvider).toSelf().inSingletonScope();
-    bind(ResourceProvider).toProvider(context =>
-        uri => context.container.get(DefaultResourceProvider).get(uri)
-    );
-    bindContributionProvider(bind, ResourceResolver);
+    bindResourceProvider(bind);
     bind(InMemoryResources).toSelf().inSingletonScope();
     bind(ResourceResolver).toService(InMemoryResources);
 
@@ -144,12 +192,12 @@ export const frontendApplicationModule = new ContainerModule((bind, unbind, isBo
     bind(MenuModelRegistry).toSelf().inSingletonScope();
     bindContributionProvider(bind, MenuContribution);
 
+    bind(KeyboardLayoutService).toSelf().inSingletonScope();
     bind(KeybindingRegistry).toSelf().inSingletonScope();
     bindContributionProvider(bind, KeybindingContext);
     bindContributionProvider(bind, KeybindingContribution);
 
-    bind(MessageClient).toSelf().inSingletonScope();
-    bind(MessageService).toSelf().inSingletonScope().onActivation(({ container }, messages) => {
+    bindMessageService(bind).onActivation(({ container }, messages) => {
         const client = container.get(MessageClient);
         WebSocketConnectionProvider.createProxy(container, messageServicePath, client);
         return messages;
@@ -157,19 +205,20 @@ export const frontendApplicationModule = new ContainerModule((bind, unbind, isBo
 
     bind(ResourceContextKey).toSelf().inSingletonScope();
     bind(CommonFrontendContribution).toSelf().inSingletonScope();
-    [FrontendApplicationContribution, CommandContribution, KeybindingContribution, MenuContribution].forEach(serviceIdentifier =>
+    [FrontendApplicationContribution, CommandContribution, KeybindingContribution, MenuContribution, ColorContribution].forEach(serviceIdentifier =>
         bind(serviceIdentifier).toService(CommonFrontendContribution)
     );
 
     bind(QuickOpenService).toSelf().inSingletonScope();
     bind(QuickInputService).toSelf().inSingletonScope();
+    bind(QuickTitleBar).toSelf().inSingletonScope();
     bind(QuickCommandService).toSelf().inSingletonScope();
     bind(QuickCommandFrontendContribution).toSelf().inSingletonScope();
     [CommandContribution, KeybindingContribution, MenuContribution].forEach(serviceIdentifier =>
         bind(serviceIdentifier).toService(QuickCommandFrontendContribution)
     );
 
-    bind(QuickPickService).to(QuickPickServiceImpl).inSingletonScope().onActivation(({ container }, quickPickService) => {
+    bind(QuickPickService).to(QuickPickServiceImpl).inSingletonScope().onActivation(({ container }, quickPickService: QuickPickService) => {
         WebSocketConnectionProvider.createProxy(container, quickPickServicePath, quickPickService);
         return quickPickService;
     });
@@ -192,22 +241,15 @@ export const frontendApplicationModule = new ContainerModule((bind, unbind, isBo
 
     bindContributionProvider(bind, LabelProviderContribution);
     bind(LabelProvider).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(LabelProvider);
     bind(LabelProviderContribution).to(DefaultUriLabelProviderContribution).inSingletonScope();
     bind(LabelProviderContribution).to(DiffUriLabelProviderContribution).inSingletonScope();
 
-    bind(PreferenceProvider).toSelf().inSingletonScope().whenTargetNamed(PreferenceScope.User);
-    bind(PreferenceProvider).toSelf().inSingletonScope().whenTargetNamed(PreferenceScope.Workspace);
-    bind(PreferenceProvider).toSelf().inSingletonScope().whenTargetNamed(PreferenceScope.Folder);
-    bind(PreferenceProviderProvider).toFactory(ctx => (scope: PreferenceScope) => {
-        if (scope === PreferenceScope.Default) {
-            return ctx.container.get(PreferenceSchemaProvider);
-        }
-        return ctx.container.getNamed(PreferenceProvider, scope);
-    });
-    bind(PreferenceServiceImpl).toSelf().inSingletonScope();
-    bind(PreferenceService).toService(PreferenceServiceImpl);
-    bind(FrontendApplicationContribution).toService(PreferenceServiceImpl);
-    bindPreferenceSchemaProvider(bind);
+    bind(TreeLabelProvider).toSelf().inSingletonScope();
+    bind(LabelProviderContribution).toService(TreeLabelProvider);
+
+    bindPreferenceService(bind);
+    bind(FrontendApplicationContribution).toService(PreferenceService);
 
     bind(JsonSchemaStore).toSelf().inSingletonScope();
 
@@ -215,7 +257,7 @@ export const frontendApplicationModule = new ContainerModule((bind, unbind, isBo
         // let's reuse a simple and cheap service from this package
         const envServer: EnvVariablesServer = ctx.container.get(EnvVariablesServer);
         return {
-            ping() {
+            ping(): Promise<EnvVariable | undefined> {
                 return envServer.getValue('does_not_matter');
             }
         };
@@ -241,10 +283,31 @@ export const frontendApplicationModule = new ContainerModule((bind, unbind, isBo
 
     bind(ThemeService).toDynamicValue(() => ThemeService.get());
 
-    bind(ThemingCommandContribution).toSelf().inSingletonScope();
-    [CommandContribution, MenuContribution].forEach(serviceIdentifier =>
-        bind(serviceIdentifier).toService(ThemingCommandContribution),
-    );
-
     bindCorePreferences(bind);
+
+    bind(MimeService).toSelf().inSingletonScope();
+
+    bind(ApplicationShellMouseTracker).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(ApplicationShellMouseTracker);
+
+    bind(ViewContainer.Factory).toFactory(context => (options: ViewContainerIdentifier) => {
+        const container = context.container.createChild();
+        container.bind(ViewContainerIdentifier).toConstantValue(options);
+        container.bind(ViewContainer).toSelf().inSingletonScope();
+        return container.get(ViewContainer);
+    });
+
+    bind(QuickViewService).toSelf().inSingletonScope();
+    bind(QuickOpenContribution).toService(QuickViewService);
+
+    bind(DialogOverlayService).toSelf().inSingletonScope();
+    bind(FrontendApplicationContribution).toService(DialogOverlayService);
+
+    bind(DispatchingProgressClient).toSelf().inSingletonScope();
+    bind(ProgressLocationService).toSelf().inSingletonScope();
+    bind(ProgressStatusBarItem).toSelf().inSingletonScope();
+    bind(ProgressClient).toService(DispatchingProgressClient);
+    bind(ProgressService).toSelf().inSingletonScope();
+
+    bind(ContextMenuContext).toSelf().inSingletonScope();
 });

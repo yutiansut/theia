@@ -40,7 +40,16 @@ export interface TerminalService {
 
     readonly all: TerminalWidget[];
 
-    getById(id: string): TerminalWidget | undefined;
+    /**
+     * @param id - the widget id (NOT the terminal id!)
+     * @return the widget
+     */
+    getById(id: string): TerminalWidget | undefined;
+
+    /**
+     * Returns detected default shell.
+     */
+    getDefaultShell(): Promise<string>;
 
     readonly onDidCreateTerminal: Event<TerminalWidget>;
 

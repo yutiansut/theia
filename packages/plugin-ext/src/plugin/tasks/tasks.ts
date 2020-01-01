@@ -20,11 +20,11 @@ import {
     TasksMain,
     TaskDto,
     TaskExecutionDto
-} from '../../api/plugin-api';
+} from '../../common/plugin-api-rpc';
 import * as theia from '@theia/plugin';
 import * as converter from '../type-converters';
 import { Disposable } from '../types-impl';
-import { RPCProtocol } from '../../api/rpc-protocol';
+import { RPCProtocol } from '../../common/rpc-protocol';
 import { TaskProviderAdapter } from './task-provider';
 import { Emitter, Event } from '@theia/core/lib/common/event';
 
@@ -37,6 +37,8 @@ export class TasksExtImpl implements TasksExt {
 
     private readonly onDidExecuteTask: Emitter<theia.TaskStartEvent> = new Emitter<theia.TaskStartEvent>();
     private readonly onDidTerminateTask: Emitter<theia.TaskEndEvent> = new Emitter<theia.TaskEndEvent>();
+    private readonly onDidExecuteTaskProcess: Emitter<theia.TaskProcessStartEvent> = new Emitter<theia.TaskProcessStartEvent>();
+    private readonly onDidTerminateTaskProcess: Emitter<theia.TaskProcessEndEvent> = new Emitter<theia.TaskProcessEndEvent>();
 
     constructor(rpc: RPCProtocol) {
         this.proxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.TASKS_MAIN);
@@ -74,25 +76,72 @@ export class TasksExtImpl implements TasksExt {
         });
     }
 
+    get onDidStartTaskProcess(): Event<theia.TaskProcessStartEvent> {
+        return this.onDidExecuteTaskProcess.event;
+    }
+
+    $onDidStartTaskProcess(processId: number, executionDto: TaskExecutionDto): void {
+        this.onDidExecuteTaskProcess.fire({
+            processId,
+            execution: this.getTaskExecution(executionDto)
+        });
+    }
+
+    get onDidEndTaskProcess(): Event<theia.TaskProcessEndEvent> {
+        return this.onDidTerminateTaskProcess.event;
+    }
+
+    $onDidEndTaskProcess(exitCode: number, taskId: number): void {
+        const taskExecution = this.executions.get(taskId);
+        if (!taskExecution) {
+            throw new Error(`Task execution with id ${taskId} is not found`);
+        }
+
+        this.onDidTerminateTaskProcess.fire({
+            execution: taskExecution,
+            exitCode
+        });
+    }
+
     registerTaskProvider(type: string, provider: theia.TaskProvider): theia.Disposable {
         const callId = this.addNewAdapter(new TaskProviderAdapter(provider));
         this.proxy.$registerTaskProvider(callId, type);
         return this.createDisposable(callId);
     }
 
-    $provideTasks(handle: number): Promise<TaskDto[] | undefined> {
+    async fetchTasks(filter?: theia.TaskFilter): Promise<theia.Task[]> {
+        const taskVersion = filter ? filter.version : undefined;
+        const taskType = filter ? filter.type : undefined;
+        const taskDtos = await this.proxy.$fetchTasks(taskVersion, taskType);
+        return taskDtos.map(dto => converter.toTask(dto));
+    }
+
+    async executeTask(task: theia.Task): Promise<theia.TaskExecution> {
+        const taskDto = converter.fromTask(task);
+        if (taskDto) {
+            const executionDto = await this.proxy.$executeTask(taskDto);
+            if (executionDto) {
+                const taskExecution = this.getTaskExecution(executionDto);
+                return taskExecution;
+            }
+            throw new Error('Run task config does not return after being started');
+        }
+        throw new Error('Task was not successfully transformed into a task config');
+    }
+
+    $provideTasks(handle: number, token?: theia.CancellationToken): Promise<TaskDto[] | undefined> {
         const adapter = this.adaptersMap.get(handle);
         if (adapter) {
-            return adapter.provideTasks();
+            return adapter.provideTasks(token);
         } else {
             return Promise.reject(new Error('No adapter found to provide tasks'));
         }
     }
 
-    $resolveTask(handle: number, task: TaskDto): Promise<TaskDto | undefined> {
+    $resolveTask(handle: number, task: TaskDto, token?: theia.CancellationToken): Promise<TaskDto | undefined> {
         const adapter = this.adaptersMap.get(handle);
         if (adapter) {
-            return adapter.resolveTask(task);
+            return adapter.resolveTask(task, token);
         } else {
             return Promise.reject(new Error('No adapter found to resolve task'));
         }
@@ -115,7 +164,7 @@ export class TasksExtImpl implements TasksExt {
         });
     }
 
-    private async fetchTaskExecutions() {
+    private async fetchTaskExecutions(): Promise<void> {
         try {
             const taskExecutions = await this.proxy.$taskExecutions();
             taskExecutions.forEach(execution => this.getTaskExecution(execution));

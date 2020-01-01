@@ -14,32 +14,46 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { MAIN_RPC_CONTEXT, NotificationExt, NotificationMain } from '../../api/plugin-api';
-import { MessageService, Progress } from '@theia/core/lib/common';
+import { NotificationMain } from '../../common/plugin-api-rpc';
+import { ProgressService, Progress, ProgressMessage } from '@theia/core/lib/common';
 import { interfaces } from 'inversify';
-import { RPCProtocol } from '../../api/rpc-protocol';
-import { Deferred } from '@theia/core/lib/common/promise-util';
+import { RPCProtocol } from '../../common/rpc-protocol';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 
-export class NotificationMainImpl implements NotificationMain {
+export class NotificationMainImpl implements NotificationMain, Disposable {
 
-    private readonly proxy: NotificationExt;
-    private readonly messageService: MessageService;
+    private readonly progressService: ProgressService;
     private readonly progressMap = new Map<string, Progress>();
-    private readonly incrementMap = new Map<string, number>();
+    private readonly progress2Work = new Map<string, number>();
+
+    protected readonly toDispose = new DisposableCollection(
+        Disposable.create(() => { /* mark as not disposed */ })
+    );
 
     constructor(rpc: RPCProtocol, container: interfaces.Container) {
-        this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.NOTIFICATION_EXT);
-        this.messageService = container.get(MessageService);
+        this.progressService = container.get(ProgressService);
     }
 
-    async $startProgress(message: string): Promise<string> {
-        const deferredId = new Deferred<string>();
-        const onDidClose = async () => this.proxy.$onCancel(await deferredId.promise);
-        const progress = await this.messageService.showProgress({ text: message, options: { cancelable: true } }, onDidClose);
-        deferredId.resolve(progress.id);
-        this.progressMap.set(progress.id, progress);
-        this.incrementMap.set(progress.id, 0);
-        return progress.id;
+    dispose(): void {
+        this.toDispose.dispose();
+    }
+
+    async $startProgress(options: NotificationMain.StartProgressOptions): Promise<string> {
+        const progressMessage = this.mapOptions(options);
+        const progress = await this.progressService.showProgress(progressMessage);
+        const id = progress.id;
+        this.progressMap.set(id, progress);
+        this.progress2Work.set(id, 0);
+        if (this.toDispose.disposed) {
+            this.$stopProgress(id);
+        } else {
+            this.toDispose.push(Disposable.create(() => this.$stopProgress(id)));
+        }
+        return id;
+    }
+    protected mapOptions(options: NotificationMain.StartProgressOptions): ProgressMessage {
+        const { title, location, cancellable } = options;
+        return { text: title, options: { location, cancelable: cancellable } };
     }
 
     $stopProgress(id: string): void {
@@ -47,23 +61,17 @@ export class NotificationMainImpl implements NotificationMain {
         if (progress) {
             progress.cancel();
             this.progressMap.delete(id);
-            this.incrementMap.delete(id);
+            this.progress2Work.delete(id);
         }
     }
 
-    $updateProgress(id: string, item: { message?: string, increment?: number }): void {
+    $updateProgress(id: string, item: NotificationMain.ProgressReport): void {
         const progress = this.progressMap.get(id);
-        let done: number | undefined;
-        if (item.increment) {
-            const increment = this.incrementMap.get(id);
-            if (increment !== undefined) {
-                done = increment + item.increment;
-                done = done > 100 ? 100 : done;
-                this.incrementMap.set(id, done);
-            }
+        if (!progress) {
+            return;
         }
-        if (progress) {
-            progress.report({ message: item.message, work: done ? { done, total: 100 } : undefined });
-        }
+        const done = Math.min((this.progress2Work.get(id) || 0) + (item.increment || 0), 100);
+        this.progress2Work.set(id, done);
+        progress.report({ message: item.message, work: done ? { done, total: 100 } : undefined });
     }
 }

@@ -17,14 +17,14 @@
 // tslint:disable:no-any
 
 import { interfaces } from 'inversify';
-import { RPCProtocol } from '../../../api/rpc-protocol';
+import { RPCProtocol } from '../../../common/rpc-protocol';
 import {
     DebugMain,
     DebugExt,
     MAIN_RPC_CONTEXT
-} from '../../../api/plugin-api';
+} from '../../../common/plugin-api-rpc';
 import { DebugSessionManager } from '@theia/debug/lib/browser/debug-session-manager';
-import { Breakpoint, WorkspaceFolder } from '../../../api/model';
+import { Breakpoint, WorkspaceFolder } from '../../../common/plugin-api-rpc-model';
 import { LabelProvider } from '@theia/core/lib/browser';
 import { EditorManager } from '@theia/editor/lib/browser';
 import { BreakpointManager } from '@theia/debug/lib/browser/breakpoint/breakpoint-manager';
@@ -43,14 +43,14 @@ import { OutputChannelManager } from '@theia/output/lib/common/output-channel';
 import { DebugPreferences } from '@theia/debug/lib/browser/debug-preferences';
 import { PluginDebugAdapterContribution } from './plugin-debug-adapter-contribution';
 import { PluginDebugSessionContributionRegistrator, PluginDebugSessionContributionRegistry } from './plugin-debug-session-contribution-registry';
-import { DisposableCollection } from '@theia/core/lib/common/disposable';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { PluginDebugSessionFactory } from './plugin-debug-session-factory';
 import { PluginWebSocketChannel } from '../../../common/connection';
 import { PluginDebugAdapterContributionRegistrator, PluginDebugService } from './plugin-debug-service';
-import { DebugSchemaUpdater } from '@theia/debug/lib/browser/debug-schema-updater';
 import { FileSystem } from '@theia/filesystem/lib/common';
+import { HostedPluginSupport } from '../../../hosted/browser/hosted-plugin';
 
-export class DebugMainImpl implements DebugMain {
+export class DebugMainImpl implements DebugMain, Disposable {
     private readonly debugExt: DebugExt;
 
     private readonly sessionManager: DebugSessionManager;
@@ -65,10 +65,11 @@ export class DebugMainImpl implements DebugMain {
     private readonly debugPreferences: DebugPreferences;
     private readonly sessionContributionRegistrator: PluginDebugSessionContributionRegistrator;
     private readonly adapterContributionRegistrator: PluginDebugAdapterContributionRegistrator;
-    private readonly debugSchemaUpdater: DebugSchemaUpdater;
     private readonly fileSystem: FileSystem;
+    private readonly pluginService: HostedPluginSupport;
 
-    private readonly toDispose = new Map<string, DisposableCollection>();
+    private readonly debuggerContributions = new Map<string, DisposableCollection>();
+    private readonly toDispose = new DisposableCollection();
 
     constructor(rpc: RPCProtocol, readonly connectionMain: ConnectionMainImpl, container: interfaces.Container) {
         this.debugExt = rpc.getProxy(MAIN_RPC_CONTEXT.DEBUG_EXT);
@@ -84,10 +85,10 @@ export class DebugMainImpl implements DebugMain {
         this.debugPreferences = container.get(DebugPreferences);
         this.adapterContributionRegistrator = container.get(PluginDebugService);
         this.sessionContributionRegistrator = container.get(PluginDebugSessionContributionRegistry);
-        this.debugSchemaUpdater = container.get(DebugSchemaUpdater);
         this.fileSystem = container.get(FileSystem);
+        this.pluginService = container.get(HostedPluginSupport);
 
-        this.breakpointsManager.onDidChangeBreakpoints(({ added, removed, changed }) => {
+        this.toDispose.push(this.breakpointsManager.onDidChangeBreakpoints(({ added, removed, changed }) => {
             // TODO can we get rid of all to reduce amount of data set each time, should not it be possible to recover on another side from deltas?
             const all = this.breakpointsManager.getBreakpoints();
             this.debugExt.$breakpointsDidChange(
@@ -96,12 +97,18 @@ export class DebugMainImpl implements DebugMain {
                 this.toTheiaPluginApiBreakpoints(removed),
                 this.toTheiaPluginApiBreakpoints(changed)
             );
-        });
+        }));
 
-        this.sessionManager.onDidCreateDebugSession(debugSession => this.debugExt.$sessionDidCreate(debugSession.id));
-        this.sessionManager.onDidDestroyDebugSession(debugSession => this.debugExt.$sessionDidDestroy(debugSession.id));
-        this.sessionManager.onDidChangeActiveDebugSession(event => this.debugExt.$sessionDidChange(event.current && event.current.id));
-        this.sessionManager.onDidReceiveDebugSessionCustomEvent(event => this.debugExt.$onSessionCustomEvent(event.session.id, event.event, event.body));
+        this.toDispose.pushAll([
+            this.sessionManager.onDidCreateDebugSession(debugSession => this.debugExt.$sessionDidCreate(debugSession.id)),
+            this.sessionManager.onDidDestroyDebugSession(debugSession => this.debugExt.$sessionDidDestroy(debugSession.id)),
+            this.sessionManager.onDidChangeActiveDebugSession(event => this.debugExt.$sessionDidChange(event.current && event.current.id)),
+            this.sessionManager.onDidReceiveDebugSessionCustomEvent(event => this.debugExt.$onSessionCustomEvent(event.session.id, event.event, event.body))
+        ]);
+    }
+
+    dispose(): void {
+        this.toDispose.dispose();
     }
 
     async $appendToDebugConsole(value: string): Promise<void> {
@@ -113,9 +120,11 @@ export class DebugMainImpl implements DebugMain {
     }
 
     async $registerDebuggerContribution(description: DebuggerDescription): Promise<void> {
-        const disposable = new DisposableCollection();
-        this.toDispose.set(description.type, disposable);
-        const terminalOptionsExt = await this.debugExt.$getTerminalCreationOptions(description.type);
+        const debugType = description.type;
+        const terminalOptionsExt = await this.debugExt.$getTerminalCreationOptions(debugType);
+        if (this.toDispose.disposed) {
+            return;
+        }
 
         const debugSessionFactory = new PluginDebugSessionFactory(
             this.terminalService,
@@ -133,25 +142,26 @@ export class DebugMainImpl implements DebugMain {
             terminalOptionsExt
         );
 
-        disposable.pushAll([
+        const toDispose = new DisposableCollection(
+            Disposable.create(() => this.debuggerContributions.delete(debugType))
+        );
+        this.debuggerContributions.set(debugType, toDispose);
+        toDispose.pushAll([
             this.adapterContributionRegistrator.registerDebugAdapterContribution(
-                new PluginDebugAdapterContribution(description, this.debugExt)
+                new PluginDebugAdapterContribution(description, this.debugExt, this.pluginService)
             ),
             this.sessionContributionRegistrator.registerDebugSessionContribution({
                 debugType: description.type,
                 debugSessionFactory: () => debugSessionFactory
             })
         ]);
-
-        this.debugSchemaUpdater.update();
+        this.toDispose.push(Disposable.create(() => this.$unregisterDebuggerConfiguration(debugType)));
     }
 
     async $unregisterDebuggerConfiguration(debugType: string): Promise<void> {
-        const disposable = this.toDispose.get(debugType);
+        const disposable = this.debuggerContributions.get(debugType);
         if (disposable) {
             disposable.dispose();
-            this.toDispose.delete(debugType);
-            this.debugSchemaUpdater.update();
         }
     }
 

@@ -26,9 +26,14 @@ import { DebugSessionManager } from '../debug-session-manager';
 import { DebugAction } from './debug-action';
 import { DebugViewModel } from './debug-view-model';
 import { DebugSessionOptions } from '../debug-session-options';
+import { DebugCommands } from '../debug-frontend-application-contribution';
+import { CommandRegistry } from '@theia/core/lib/common';
 
 @injectable()
 export class DebugConfigurationWidget extends ReactWidget {
+
+    @inject(CommandRegistry)
+    protected readonly commandRegistry: CommandRegistry;
 
     @inject(DebugViewModel)
     protected readonly viewModel: DebugViewModel;
@@ -49,6 +54,9 @@ export class DebugConfigurationWidget extends ReactWidget {
     protected init(): void {
         this.addClass('debug-toolbar');
         this.toDispose.push(this.manager.onDidChange(() => this.update()));
+        this.toDispose.push(this.workspaceService.onWorkspaceChanged(() => this.update()));
+        this.toDispose.push(this.workspaceService.onWorkspaceLocationChanged(() => this.update()));
+        this.scrollOptions = undefined;
         this.update();
     }
 
@@ -72,7 +80,7 @@ export class DebugConfigurationWidget extends ReactWidget {
         const { options } = this;
         return <React.Fragment>
             <DebugAction run={this.start} label='Start Debugging' iconClass='start' ref={this.setStepRef} />
-            <select className='debug-configuration' value={this.currentValue} onChange={this.setCurrentConfiguration}>
+            <select className='theia-select debug-configuration' value={this.currentValue} onChange={this.setCurrentConfiguration}>
                 {options.length ? options : <option value='__NO_CONF__'>No Configurations</option>}
                 <option disabled>{'Add Configuration...'.replace(/./g, '-')}</option>
                 <option value='__ADD_CONF__'>Add Configuration...</option>
@@ -115,11 +123,7 @@ export class DebugConfigurationWidget extends ReactWidget {
 
     protected readonly start = () => {
         const configuration = this.manager.current;
-        if (configuration) {
-            this.sessionManager.start(configuration);
-        } else {
-            this.manager.addConfiguration();
-        }
+        this.commandRegistry.executeCommand(DebugCommands.START.id, configuration);
     }
 
     protected readonly openConfiguration = () => this.manager.openConfiguration();

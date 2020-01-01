@@ -14,24 +14,30 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+// tslint:disable:no-any
+
 import * as electron from 'electron';
 import { inject, injectable } from 'inversify';
 import {
     CommandRegistry, isOSX, ActionMenuNode, CompositeMenuNode,
     MAIN_MENU_BAR, MenuModelRegistry, MenuPath
 } from '../../common';
-import { PreferenceService, KeybindingRegistry, Keybinding, KeyCode, Key } from '../../browser';
+import { PreferenceService, KeybindingRegistry, Keybinding } from '../../browser';
 import { ContextKeyService } from '../../browser/context-key-service';
-import { Anchor } from '../../browser/context-menu-renderer';
+import debounce = require('lodash.debounce');
+import { ContextMenuContext } from '../../browser/menu/context-menu-context';
 
 @injectable()
 export class ElectronMainMenuFactory {
 
-    protected _menu: Electron.Menu;
+    protected _menu: Electron.Menu | undefined;
     protected _toggledCommands: Set<string> = new Set();
 
     @inject(ContextKeyService)
     protected readonly contextKeyService: ContextKeyService;
+
+    @inject(ContextMenuContext)
+    protected readonly context: ContextMenuContext;
 
     constructor(
         @inject(CommandRegistry) protected readonly commandRegistry: CommandRegistry,
@@ -39,10 +45,20 @@ export class ElectronMainMenuFactory {
         @inject(MenuModelRegistry) protected readonly menuProvider: MenuModelRegistry,
         @inject(KeybindingRegistry) protected readonly keybindingRegistry: KeybindingRegistry
     ) {
-        this.preferencesService.onPreferenceChanged(() => {
-            for (const item of this._toggledCommands) {
-                this._menu.getMenuItemById(item).checked = this.commandRegistry.isToggled(item);
+        preferencesService.onPreferenceChanged(debounce(() => {
+            if (this._menu) {
+                for (const item of this._toggledCommands) {
+                    this._menu.getMenuItemById(item).checked = this.commandRegistry.isToggled(item);
+                }
                 electron.remote.getCurrentWindow().setMenu(this._menu);
+            }
+        }, 10));
+        keybindingRegistry.onKeybindingsChanged(() => {
+            const createdMenuBar = this.createMenuBar();
+            if (isOSX) {
+                electron.remote.Menu.setApplicationMenu(createdMenuBar);
+            } else {
+                electron.remote.getCurrentWindow().setMenu(createdMenuBar);
             }
         });
     }
@@ -58,16 +74,16 @@ export class ElectronMainMenuFactory {
         return menu;
     }
 
-    createContextMenu(menuPath: MenuPath, anchor?: Anchor): Electron.Menu {
+    createContextMenu(menuPath: MenuPath, args?: any[]): Electron.Menu {
         const menuModel = this.menuProvider.getMenu(menuPath);
-        const template = this.fillMenuTemplate([], menuModel, anchor);
+        const template = this.fillMenuTemplate([], menuModel, args);
 
         return electron.remote.Menu.buildFromTemplate(template);
     }
 
     protected fillMenuTemplate(items: Electron.MenuItemConstructorOptions[],
         menuModel: CompositeMenuNode,
-        anchor?: Anchor
+        args: any[] = []
     ): Electron.MenuItemConstructorOptions[] {
         for (const menu of menuModel.children) {
             if (menu instanceof CompositeMenuNode) {
@@ -76,7 +92,7 @@ export class ElectronMainMenuFactory {
 
                     if (menu.isSubmenu) { // submenu node
 
-                        const submenu = this.fillMenuTemplate([], menu, anchor);
+                        const submenu = this.fillMenuTemplate([], menu, args);
                         if (submenu.length === 0) {
                             continue;
                         }
@@ -89,7 +105,7 @@ export class ElectronMainMenuFactory {
                     } else { // group node
 
                         // process children
-                        const submenu = this.fillMenuTemplate([], menu, anchor);
+                        const submenu = this.fillMenuTemplate([], menu, args);
                         if (submenu.length === 0) {
                             continue;
                         }
@@ -107,16 +123,16 @@ export class ElectronMainMenuFactory {
                     }
                 }
             } else if (menu instanceof ActionMenuNode) {
-                const commandId = menu.action.commandId;
+                const node = menu.altNode && this.context.altPressed ? menu.altNode : menu;
+                const commandId = node.action.commandId;
 
                 // That is only a sanity check at application startup.
                 if (!this.commandRegistry.getCommand(commandId)) {
                     throw new Error(`Unknown command with ID: ${commandId}.`);
                 }
 
-                const args = anchor ? [anchor] : [];
                 if (!this.commandRegistry.isVisible(commandId, ...args)
-                    || (!!menu.action.when && !this.contextKeyService.match(menu.action.when))) {
+                    || (!!node.action.when && !this.contextKeyService.match(node.action.when))) {
                     continue;
                 }
 
@@ -131,16 +147,16 @@ export class ElectronMainMenuFactory {
                 }
 
                 items.push({
-                    id: menu.id,
-                    label: menu.label,
-                    type: this.commandRegistry.getToggledHandler(commandId) ? 'checkbox' : 'normal',
-                    checked: this.commandRegistry.isToggled(commandId),
-                    enabled: true, // https://github.com/theia-ide/theia/issues/446
+                    id: node.id,
+                    label: node.label,
+                    type: this.commandRegistry.getToggledHandler(commandId, ...args) ? 'checkbox' : 'normal',
+                    checked: this.commandRegistry.isToggled(commandId, ...args),
+                    enabled: true, // https://github.com/eclipse-theia/theia/issues/446
                     visible: true,
-                    click: () => this.execute(commandId, anchor),
+                    click: () => this.execute(commandId, args),
                     accelerator
                 });
-                if (this.commandRegistry.getToggledHandler(commandId)) {
+                if (this.commandRegistry.getToggledHandler(commandId, ...args)) {
                     this._toggledCommands.add(commandId);
                 }
             }
@@ -151,75 +167,30 @@ export class ElectronMainMenuFactory {
     /**
      * Return a user visible representation of a keybinding.
      */
-    protected acceleratorFor(keybinding: Keybinding) {
-        const keyCodesString = keybinding.keybinding.split(' ');
-        let result = '';
+    protected acceleratorFor(keybinding: Keybinding): string {
+        const bindingKeySequence = this.keybindingRegistry.resolveKeybinding(keybinding);
         // FIXME see https://github.com/electron/electron/issues/11740
         // Key Sequences can't be represented properly in the electron menu.
         //
         // We can do what VS Code does, and append the chords as a suffix to the menu label.
-        // https://github.com/theia-ide/theia/issues/1199#issuecomment-430909480
-        if (keyCodesString.length > 1) {
-            return result;
+        // https://github.com/eclipse-theia/theia/issues/1199#issuecomment-430909480
+        if (bindingKeySequence.length > 1) {
+            return '';
         }
 
-        const keyCodeString = keyCodesString[0];
-        const keyCode = KeyCode.parse(keyCodeString);
-        let previous = false;
-        const separator = '+';
-
-        if (keyCode.meta && isOSX) {
-            if (isOSX) {
-                result += 'Cmd';
-                previous = true;
-            }
-        }
-
-        if (keyCode.ctrl) {
-            if (previous) {
-                result += separator;
-            }
-            result += 'Ctrl';
-            previous = true;
-        }
-
-        if (keyCode.alt) {
-            if (previous) {
-                result += separator;
-            }
-            result += 'Alt';
-            previous = true;
-        }
-
-        if (keyCode.shift) {
-            if (previous) {
-                result += separator;
-            }
-            result += 'Shift';
-            previous = true;
-        }
-
-        if (keyCode.key) {
-            if (previous) {
-                result += separator;
-            }
-
-            result += Key.getEasyKey(keyCode.key).easyString;
-        }
-
-        return result;
+        const keyCode = bindingKeySequence[0];
+        return this.keybindingRegistry.acceleratorForKeyCode(keyCode, '+');
     }
 
-    protected async execute(command: string, anchor?: Anchor): Promise<void> {
+    protected async execute(command: string, args: any[]): Promise<void> {
         try {
-            const args = anchor ? [anchor] : [];
-            // This is workaround for https://github.com/theia-ide/theia/issues/446.
+            // This is workaround for https://github.com/eclipse-theia/theia/issues/446.
             // Electron menus do not update based on the `isEnabled`, `isVisible` property of the command.
             // We need to check if we can execute it.
             if (this.commandRegistry.isEnabled(command, ...args)) {
                 await this.commandRegistry.executeCommand(command, ...args);
-                if (this.commandRegistry.isVisible(command, ...args)) {
-                    this._menu.getMenuItemById(command).checked = this.commandRegistry.isToggled(command);
+                if (this._menu && this.commandRegistry.isVisible(command, ...args)) {
+                    this._menu.getMenuItemById(command).checked = this.commandRegistry.isToggled(command, ...args);
                     electron.remote.getCurrentWindow().setMenu(this._menu);
                 }
             }

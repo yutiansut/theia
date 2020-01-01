@@ -23,7 +23,7 @@ import { CommonMenus } from '@theia/core/lib/browser/common-frontend-contributio
 import { FileSystem, FileStat } from '@theia/filesystem/lib/common/filesystem';
 import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { SingleTextInputDialog, ConfirmDialog } from '@theia/core/lib/browser/dialogs';
-import { OpenerService, OpenHandler, open, FrontendApplication } from '@theia/core/lib/browser';
+import { OpenerService, OpenHandler, open, FrontendApplication, LabelProvider } from '@theia/core/lib/browser';
 import { UriCommandHandler, UriAwareCommandHandler } from '@theia/core/lib/common/uri-command-handler';
 import { WorkspaceService } from './workspace-service';
 import { MessageService } from '@theia/core/lib/common/message-service';
@@ -33,6 +33,8 @@ import { WorkspaceDuplicateHandler } from './workspace-duplicate-handler';
 import { FileSystemUtils } from '@theia/filesystem/lib/common';
 import { WorkspaceCompareHandler } from './workspace-compare-handler';
 import { FileDownloadCommands } from '@theia/filesystem/lib/browser/download/file-download-command-contribution';
+import { FileSystemCommands } from '@theia/filesystem/lib/browser/filesystem-frontend-contribution';
+import { WorkspaceInputDialog } from './workspace-input-dialog';
 
 const validFilename: (arg: string) => boolean = require('valid-filename');
 
@@ -44,7 +46,7 @@ export namespace WorkspaceCommands {
     // On Linux and Windows, both files and folders cannot be opened at the same time in electron.
     // `OPEN_FILE` and `OPEN_FOLDER` must be available only on Linux and Windows in electron.
     // `OPEN` must *not* be available on Windows and Linux in electron.
-    // VS Code does the same. See: https://github.com/theia-ide/theia/pull/3202#issuecomment-430585357
+    // VS Code does the same. See: https://github.com/eclipse-theia/theia/pull/3202#issuecomment-430585357
     export const OPEN: Command & { dialogLabel: string } = {
         id: 'workspace:open',
         category: FILE_CATEGORY,
@@ -125,12 +127,17 @@ export namespace WorkspaceCommands {
         category: WORKSPACE_CATEGORY,
         label: 'Save Workspace As...'
     };
+    export const SAVE_AS: Command = {
+        id: 'file.saveAs',
+        category: 'File',
+        label: 'Save As...',
+    };
 }
 
 @injectable()
 export class FileMenuContribution implements MenuContribution {
 
-    registerMenus(registry: MenuModelRegistry) {
+    registerMenus(registry: MenuModelRegistry): void {
         registry.registerMenuAction(CommonMenus.FILE_NEW, {
             commandId: WorkspaceCommands.NEW_FILE.id
         });
@@ -139,7 +146,7 @@ export class FileMenuContribution implements MenuContribution {
         });
         const downloadUploadMenu = [...CommonMenus.FILE, '4_downloadupload'];
         registry.registerMenuAction(downloadUploadMenu, {
-            commandId: FileDownloadCommands.UPLOAD.id,
+            commandId: FileSystemCommands.UPLOAD.id,
             order: 'a'
         });
         registry.registerMenuAction(downloadUploadMenu, {
@@ -151,8 +158,21 @@ export class FileMenuContribution implements MenuContribution {
 }
 
 @injectable()
+export class EditMenuContribution implements MenuContribution {
+
+    registerMenus(registry: MenuModelRegistry): void {
+        registry.registerMenuAction(CommonMenus.EDIT_CLIPBOARD, {
+            commandId: FileDownloadCommands.COPY_DOWNLOAD_LINK.id,
+            order: '9999'
+        });
+    }
+
+}
+
+@injectable()
 export class WorkspaceCommandContribution implements CommandContribution {
 
+    @inject(LabelProvider) protected readonly labelProvider: LabelProvider;
     @inject(FileSystem) protected readonly fileSystem: FileSystem;
     @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService;
     @inject(SelectionService) protected readonly selectionService: SelectionService;
@@ -182,11 +202,14 @@ export class WorkspaceCommandContribution implements CommandContribution {
                     const parentUri = new URI(parent.uri);
                     const { fileName, fileExtension } = this.getDefaultFileConfig();
                     const vacantChildUri = FileSystemUtils.generateUniqueResourceURI(parentUri, parent, fileName, fileExtension);
-                    const dialog = new SingleTextInputDialog({
+
+                    const dialog = new WorkspaceInputDialog({
                         title: 'New File',
+                        parentUri: parentUri,
                         initialValue: vacantChildUri.path.base,
-                        validate: name => this.validateFileName(name, parent)
-                    });
+                        validate: name => this.validateFileName(name, parent, true)
+                    }, this.labelProvider);
+
                     dialog.open().then(name => {
                         if (name) {
                             const fileUri = parentUri.resolve(name);
@@ -203,11 +226,12 @@ export class WorkspaceCommandContribution implements CommandContribution {
                 if (parent) {
                     const parentUri = new URI(parent.uri);
                     const vacantChildUri = FileSystemUtils.generateUniqueResourceURI(parentUri, parent, 'Untitled');
-                    const dialog = new SingleTextInputDialog({
+                    const dialog = new WorkspaceInputDialog({
                         title: 'New Folder',
+                        parentUri: parentUri,
                         initialValue: vacantChildUri.path.base,
-                        validate: name => this.validateFileName(name, parent)
-                    });
+                        validate: name => this.validateFileName(name, parent, true)
+                    }, this.labelProvider);
                     dialog.open().then(name => {
                         if (name) {
                             this.fileSystem.createFolder(parentUri.resolve(name).toString());
@@ -240,7 +264,7 @@ export class WorkspaceCommandContribution implements CommandContribution {
                                 if (initialValue === name && mode === 'preview') {
                                     return false;
                                 }
-                                return this.validateFileName(name, parent);
+                                return this.validateFileName(name, parent, false);
                             }
                         });
                         dialog.open().then(name => {
@@ -256,10 +280,10 @@ export class WorkspaceCommandContribution implements CommandContribution {
         registry.registerCommand(WorkspaceCommands.FILE_DELETE, this.newMultiUriAwareCommandHandler(this.deleteHandler));
         registry.registerCommand(WorkspaceCommands.FILE_COMPARE, this.newMultiUriAwareCommandHandler(this.compareHandler));
         this.preferences.ready.then(() => {
-            registry.registerCommand(WorkspaceCommands.ADD_FOLDER, this.newMultiUriAwareCommandHandler({
-                isEnabled: () => this.workspaceService.isMultiRootWorkspaceOpened,
-                isVisible: uris => !uris.length || this.areWorkspaceRoots(uris),
-                execute: async uris => {
+            registry.registerCommand(WorkspaceCommands.ADD_FOLDER, {
+                isEnabled: () => this.workspaceService.isMultiRootWorkspaceEnabled,
+                isVisible: () => this.workspaceService.isMultiRootWorkspaceEnabled,
+                execute: async () => {
                     const uri = await this.fileDialogService.showOpenDialog({
                         title: WorkspaceCommands.ADD_FOLDER.label!,
                         canSelectFiles: false,
@@ -282,10 +306,10 @@ export class WorkspaceCommandContribution implements CommandContribution {
                         }
                     }
                 }
-            }));
+            });
             registry.registerCommand(WorkspaceCommands.REMOVE_FOLDER, this.newMultiUriAwareCommandHandler({
                 execute: uris => this.removeFolderFromWorkspace(uris),
-                isEnabled: () => this.workspaceService.isMultiRootWorkspaceOpened,
+                isEnabled: () => this.workspaceService.isMultiRootWorkspaceEnabled,
                 isVisible: uris => this.areWorkspaceRoots(uris) && this.workspaceService.saved
             }));
         });
@@ -308,19 +332,38 @@ export class WorkspaceCommandContribution implements CommandContribution {
      *
      * @param name the simple file name of the file to validate.
      * @param parent the parent directory's file stat.
+     * @param recursive allow file or folder creation using recursive path
      */
-    protected validateFileName(name: string, parent: FileStat): string {
-        if (!validFilename(name)) {
-            return 'Invalid name, try other';
+    protected async validateFileName(name: string, parent: FileStat, recursive: boolean = false): Promise<string> {
+        if (!name) {
+            return '';
         }
-        if (parent.children) {
-            for (const child of parent.children) {
-                if (new URI(child.uri).path.base === name) {
-                    return 'A file with this name already exists.';
-                }
-            }
+        // do not allow recursive rename
+        if (!recursive && !validFilename(name)) {
+            return 'Invalid file or folder name';
+        }
+        if (name.startsWith('/')) {
+            return 'Absolute paths or names that starts with / are not allowed';
+        } else if (name.startsWith(' ') || name.endsWith(' ')) {
+            return 'Names with leading or trailing whitespaces are not allowed';
+        }
+        // check and validate each sub-paths
+        if (name.split(/[\\/]/).some(file => !file || !validFilename(file) || /^\s+$/.test(file))) {
+            return `The name <strong>${this.trimFileName(name)}</strong> is not a valid file or folder name.`;
+        }
+        const childUri = new URI(parent.uri).resolve(name).toString();
+        const exists = await this.fileSystem.exists(childUri);
+        if (exists) {
+            return `A file or folder <strong>${this.trimFileName(name)}</strong> already exists at this location.`;
         }
         return '';
+    }
+
+    protected trimFileName(name: string): string {
+        if (name && name.length > 30) {
+            return `${name.substr(0, 30)}...`;
+        }
+        return name;
     }
 
     protected async getDirectory(candidate: URI): Promise<FileStat | undefined> {
@@ -345,11 +388,7 @@ export class WorkspaceCommandContribution implements CommandContribution {
     }
 
     protected areWorkspaceRoots(uris: URI[]): boolean {
-        if (!uris.length) {
-            return false;
-        }
-        const rootUris = new Set(this.workspaceService.tryGetRoots().map(root => root.uri));
-        return uris.every(uri => rootUris.has(uri.toString()));
+        return this.workspaceService.areWorkspaceRoots(uris);
     }
 
     protected isWorkspaceRoot(uri: URI): boolean {
@@ -400,7 +439,6 @@ export class WorkspaceCommandContribution implements CommandContribution {
         }
         return false;
     }
-
 }
 
 export class WorkspaceRootUriAwareCommandHandler extends UriAwareCommandHandler<URI> {
@@ -413,16 +451,27 @@ export class WorkspaceRootUriAwareCommandHandler extends UriAwareCommandHandler<
         super(selectionService, handler);
     }
 
-    protected getUri(): URI | undefined {
-        const uri = super.getUri();
-        if (this.workspaceService.isMultiRootWorkspaceOpened) {
-            return uri;
-        }
+    // tslint:disable-next-line: no-any
+    public isEnabled(...args: any[]): boolean {
+        return super.isEnabled(...args) && !!this.workspaceService.tryGetRoots().length;
+    }
+
+    // tslint:disable-next-line: no-any
+    public isVisible(...args: any[]): boolean {
+        return super.isVisible(...args) && !!this.workspaceService.tryGetRoots().length;
+    }
+
+    // tslint:disable-next-line: no-any
+    protected getUri(...args: any[]): URI | undefined {
+        const uri = super.getUri(...args);
+        // If the URI is available, return it immediately.
         if (uri) {
             return uri;
         }
-        const root = this.workspaceService.tryGetRoots()[0];
-        return root && new URI(root.uri);
+        // Return the first root if available.
+        if (!!this.workspaceService.tryGetRoots().length) {
+            return new URI(this.workspaceService.tryGetRoots()[0].uri);
+        }
     }
 
 }

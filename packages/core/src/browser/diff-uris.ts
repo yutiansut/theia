@@ -16,13 +16,13 @@
 
 import { injectable, inject } from 'inversify';
 import URI from '../common/uri';
-import { LabelProviderContribution, LabelProvider } from './label-provider';
+import { LabelProviderContribution, LabelProvider, DidChangeLabelEvent } from './label-provider';
 
 export namespace DiffUris {
 
     export const DIFF_SCHEME = 'diff';
 
-    export function encode(left: URI, right: URI, name?: string): URI {
+    export function encode(left: URI, right: URI, label?: string): URI {
         const diffUris = [
             left.toString(),
             right.toString()
@@ -30,7 +30,7 @@ export namespace DiffUris {
 
         const diffUriStr = JSON.stringify(diffUris);
 
-        return new URI(name || left.displayName).withScheme(DIFF_SCHEME).withQuery(diffUriStr);
+        return new URI().withScheme(DIFF_SCHEME).withPath(label || '').withQuery(diffUriStr);
     }
 
     export function decode(uri: URI): URI[] {
@@ -60,6 +60,10 @@ export class DiffUriLabelProviderContribution implements LabelProviderContributi
     }
 
     getLongName(uri: URI): string {
+        const label = uri.path.toString();
+        if (label) {
+            return label;
+        }
         const [left, right] = DiffUris.decode(uri);
         const leftLongName = this.labelProvider.getLongName(left);
         const rightLongName = this.labelProvider.getLongName(right);
@@ -70,21 +74,42 @@ export class DiffUriLabelProviderContribution implements LabelProviderContributi
     }
 
     getName(uri: URI): string {
+        const label = uri.path.toString();
+        if (label) {
+            return label;
+        }
         const [left, right] = DiffUris.decode(uri);
 
         if (left.path.toString() === right.path.toString() && left.query && right.query) {
             return `${left.displayName}: ${left.query} ⟷ ${right.query}`;
         } else {
+            let title;
+            if (left.path.toString() !== right.path.toString() && left.displayName !== uri.displayName) {
+                title = `${uri.displayName}: `;
+            } else {
+                title = '';
+            }
+
             const leftLongName = this.labelProvider.getName(left);
             const rightLongName = this.labelProvider.getName(right);
             if (leftLongName === rightLongName) {
                 return leftLongName;
             }
-            return `${leftLongName} ⟷ ${rightLongName}`;
+            return `${title}${leftLongName} ⟷ ${rightLongName}`;
         }
     }
 
     getIcon(uri: URI): string {
         return 'fa fa-columns';
     }
+
+    affects(diffUri: URI, event: DidChangeLabelEvent): boolean {
+        for (const uri of DiffUris.decode(diffUri)) {
+            if (event.affects(uri)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 }

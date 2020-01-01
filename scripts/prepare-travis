@@ -36,11 +36,20 @@ for (const name in workspaces) {
     }
 }
 
+const yarnList = child_process.execSync('yarn list -s --pattern vscode-ripgrep').toString();
+const regexp = new RegExp('vscode-ripgrep@(.*)', 'g');
+while (match = regexp.exec(yarnList)) {
+    const ripgrepPath = '/tmp/vscode-ripgrep-cache-' + match[1].trim();
+    directories.push(ripgrepPath);
+}
+
 const travisPath = path.resolve(__dirname, '../.travis.yml');
 const content = fs.readFileSync(travisPath).toString();
+// compute checked out travis line ending characters
+const endOfLine = content[content.indexOf('\n') - 1] === '\r' ? '\r\n' : '\n';
 const startIndex = content.indexOf('# start_cache_directories') + '# start_cache_directories'.length;
 const endIndex = content.indexOf('# end_cache_directories');
-const result = content.substr(0, startIndex) + os.EOL +
-    directories.sort((d, d2) => d.localeCompare(d2)).map(d => `  - ${d}${os.EOL}`).join('') +
+const result = content.substr(0, startIndex) + endOfLine +
+    directories.sort((d, d2) => d.localeCompare(d2)).map(d => `  - ${d}${endOfLine}`).join('') +
     content.substr(endIndex);
 fs.writeFileSync(travisPath, result);

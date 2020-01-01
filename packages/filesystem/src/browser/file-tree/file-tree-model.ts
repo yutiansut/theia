@@ -22,7 +22,6 @@ import { FileSystemWatcher, FileChangeType, FileChange, FileMoveEvent } from '..
 import { FileStatNode, DirNode, FileNode } from './file-tree';
 import { LocationService } from '../location';
 import { LabelProvider } from '@theia/core/lib/browser/label-provider';
-import * as base64 from 'base64-js';
 
 @injectable()
 export class FileTreeModel extends TreeModelImpl implements LocationService {
@@ -50,9 +49,7 @@ export class FileTreeModel extends TreeModelImpl implements LocationService {
         if (uri) {
             this.fileSystem.getFileStat(uri.toString()).then(async fileStat => {
                 if (fileStat) {
-                    const label = this.labelProvider.getName(uri);
-                    const icon = await this.labelProvider.getIcon(fileStat);
-                    const node = DirNode.createRoot(fileStat, label, icon);
+                    const node = DirNode.createRoot(fileStat);
                     this.navigateTo(node);
                 }
             });
@@ -90,8 +87,8 @@ export class FileTreeModel extends TreeModelImpl implements LocationService {
             return;
         }
         this.refreshAffectedNodes([
-            move.sourceUri.parent,
-            move.targetUri.parent
+            move.sourceUri,
+            move.targetUri
         ]);
     }
 
@@ -168,10 +165,11 @@ export class FileTreeModel extends TreeModelImpl implements LocationService {
             if (target.uri.toString() === sourceUri) { /*  Folder on itself */
                 return;
             }
-            const targetUri = target.uri.resolve(source.name).toString();
+            const name = source.uri.displayName;
+            const targetUri = target.uri.resolve(name).toString();
             if (sourceUri !== targetUri) { /*  File not on itself */
                 const fileExistsInTarget = await this.fileSystem.exists(targetUri);
-                if (!fileExistsInTarget || await this.shouldReplace(source.name)) {
+                if (!fileExistsInTarget || await this.shouldReplace(name)) {
                     await this.fileSystem.move(sourceUri, targetUri, { overwrite: true });
                 }
             }
@@ -186,82 +184,6 @@ export class FileTreeModel extends TreeModelImpl implements LocationService {
             cancel: 'No'
         });
         return !!await dialog.open();
-    }
-
-    upload(node: DirNode, items: DataTransferItemList): void {
-        for (let i = 0; i < items.length; i++) {
-            const entry = items[i].webkitGetAsEntry() as WebKitEntry;
-            this.uploadEntry(node.uri, entry);
-        }
-    }
-
-    protected uploadEntry(base: URI, entry: WebKitEntry | null): void {
-        if (!entry) {
-            return;
-        }
-        if (entry.isDirectory) {
-            this.uploadDirectoryEntry(base, entry as WebKitDirectoryEntry);
-        } else {
-            this.uploadFileEntry(base, entry as WebKitFileEntry);
-        }
-    }
-
-    protected async uploadDirectoryEntry(base: URI, entry: WebKitDirectoryEntry): Promise<void> {
-        const newBase = base.resolve(entry.name);
-        const uri = newBase.toString();
-        if (!await this.fileSystem.exists(uri)) {
-            await this.fileSystem.createFolder(uri);
-        }
-        this.readEntries(entry, items => this.uploadEntries(newBase, items));
-    }
-
-    /**
-     *  Read all entries within a folder by block of 100 files or folders until the
-     *  whole folder has been read.
-     */
-    // tslint:disable-next-line:no-any
-    protected readEntries(entry: WebKitDirectoryEntry, cb: (items: any) => void): void {
-        const reader = entry.createReader();
-        const getEntries = () => {
-            reader.readEntries(results => {
-                if (results) {
-                    cb(results);
-                    getEntries(); // loop to read all entries
-                }
-            });
-        };
-        getEntries();
-    }
-
-    protected uploadEntries(base: URI, entries: WebKitEntry[]): void {
-        for (let i = 0; i < entries.length; i++) {
-            this.uploadEntry(base, entries[i]);
-        }
-    }
-
-    protected uploadFileEntry(base: URI, entry: WebKitFileEntry): void {
-        // tslint:disable-next-line:no-any
-        entry.file(file => this.uploadFile(base, file as any));
-    }
-
-    protected uploadFile(base: URI, file: File): void {
-        const reader = new FileReader();
-        reader.onload = () => this.uploadFileContent(base.resolve(file.name), reader.result as ArrayBuffer);
-        reader.readAsArrayBuffer(file);
-    }
-
-    protected async uploadFileContent(base: URI, fileContent: ArrayBuffer): Promise<void> {
-        const uri = base.toString();
-        const encoding = 'base64';
-        const content = base64.fromByteArray(new Uint8Array(fileContent));
-        const stat = await this.fileSystem.getFileStat(uri);
-        if (stat) {
-            if (!stat.isDirectory) {
-                await this.fileSystem.setContent(stat, content, { encoding });
-            }
-        } else {
-            await this.fileSystem.createFile(uri, { content, encoding });
-        }
     }
 
 }

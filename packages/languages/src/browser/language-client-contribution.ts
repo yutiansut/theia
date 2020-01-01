@@ -159,15 +159,16 @@ export abstract class BaseLanguageClientContribution implements LanguageClientCo
                             } catch { /* no-op */ }
                         }
                     })()));
-                    toStop.push(messageConnection.onClose(() => this.restart()));
-                    this.onWillStart(this._languageClient!);
+                    toStop.push(messageConnection.onClose(() => this.forceRestart()));
                     this._languageClient!.start();
+                    // it should be called after `start` that `onReady` promise gets reinitialized
+                    this.onWillStart(this._languageClient!, toStop);
                 }
             }, { reconnecting: false });
         } catch (e) {
             console.error(e);
             if (!toStop.disposed) {
-                this.restart();
+                this.forceRestart();
             }
         }
     }
@@ -178,15 +179,22 @@ export abstract class BaseLanguageClientContribution implements LanguageClientCo
     }
 
     restart(): void {
+        if (!this.running) {
+            return;
+        }
+        this.forceRestart();
+    }
+
+    protected forceRestart(): void {
         this.deactivate();
         this.activate();
     }
 
-    protected onWillStart(languageClient: ILanguageClient): void {
-        languageClient.onReady().then(() => this.onReady(languageClient));
+    protected onWillStart(languageClient: ILanguageClient, toStop?: DisposableCollection): void {
+        languageClient.onReady().then(() => this.onReady(languageClient, toStop));
     }
 
-    protected onReady(languageClient: ILanguageClient): void {
+    protected onReady(languageClient: ILanguageClient, toStop?: DisposableCollection): void {
         this._languageClient = languageClient;
         this.resolveReady(this._languageClient);
         this.waitForReady();

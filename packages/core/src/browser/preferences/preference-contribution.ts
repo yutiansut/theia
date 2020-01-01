@@ -16,16 +16,17 @@
 
 import * as Ajv from 'ajv';
 import { inject, injectable, interfaces, named, postConstruct } from 'inversify';
-import { ContributionProvider, bindContributionProvider, escapeRegExpCharacters, Emitter, Event } from '../../common';
+import { ContributionProvider, bindContributionProvider, escapeRegExpCharacters, Emitter, Event, Disposable } from '../../common';
 import { PreferenceScope } from './preference-scope';
-import { PreferenceProvider, PreferenceProviderPriority, PreferenceProviderDataChange } from './preference-provider';
-
+import { PreferenceProvider, PreferenceProviderDataChange } from './preference-provider';
 import {
     PreferenceSchema, PreferenceSchemaProperties, PreferenceDataSchema, PreferenceItem, PreferenceSchemaProperty, PreferenceDataProperty, JsonType
 } from '../../common/preferences/preference-schema';
 import { FrontendApplicationConfigProvider } from '../frontend-application-config-provider';
 import { FrontendApplicationConfig } from '@theia/application-package/lib/application-props';
+import { bindPreferenceConfigurations, PreferenceConfigurations } from './preference-configurations';
 export { PreferenceSchema, PreferenceSchemaProperties, PreferenceDataSchema, PreferenceItem, PreferenceSchemaProperty, PreferenceDataProperty, JsonType };
+import { Mutable } from '../../common/types';
 
 // tslint:disable:no-any
 // tslint:disable:forin
@@ -36,6 +37,7 @@ export interface PreferenceContribution {
 }
 
 export function bindPreferenceSchemaProvider(bind: interfaces.Bind): void {
+    bindPreferenceConfigurations(bind);
     bind(PreferenceSchemaProvider).toSelf().inSingletonScope();
     bindContributionProvider(bind, PreferenceContribution);
 }
@@ -43,6 +45,12 @@ export function bindPreferenceSchemaProvider(bind: interfaces.Bind): void {
 export interface OverridePreferenceName {
     preferenceName: string
     overrideIdentifier: string
+}
+export namespace OverridePreferenceName {
+    // tslint:disable-next-line:no-any
+    export function is(arg: any): arg is OverridePreferenceName {
+        return !!arg && typeof arg === 'object' && 'preferenceName' in arg && 'overrideIdentifier' in arg;
+    }
 }
 
 const OVERRIDE_PROPERTY = '\\[(.*)\\]$';
@@ -69,7 +77,9 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
 
     @inject(ContributionProvider) @named(PreferenceContribution)
     protected readonly preferenceContributions: ContributionProvider<PreferenceContribution>;
-    protected validateFunction: Ajv.ValidateFunction;
+
+    @inject(PreferenceConfigurations)
+    protected readonly configurations: PreferenceConfigurations;
 
     protected readonly onDidPreferenceSchemaChangedEmitter = new Emitter<void>();
     readonly onDidPreferenceSchemaChanged: Event<void> = this.onDidPreferenceSchemaChangedEmitter.event;
@@ -83,8 +93,6 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
             this.doSetSchema(contrib.schema);
         });
         this.combinedSchema.additionalProperties = false;
-        this.updateValidate();
-        this.onDidPreferencesChanged(() => this.updateValidate());
         this._ready.resolve();
     }
 
@@ -97,11 +105,12 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
         this.updateOverridePatternPropertiesKey();
     }
 
-    protected readonly overridePatternProperties: Required<Pick<PreferenceDataProperty, 'properties'>> & PreferenceDataProperty = {
+    protected readonly overridePatternProperties: Required<Pick<PreferenceDataProperty, 'properties' | 'additionalProperties'>> & PreferenceDataProperty = {
         type: 'object',
         description: 'Configure editor settings to be overridden for a language.',
         errorMessage: 'Unknown Identifier. Use language identifiers',
-        properties: {}
+        properties: {},
+        additionalProperties: false
     };
     protected overridePatternPropertiesKey: string | undefined;
     protected updateOverridePatternPropertiesKey(): void {
@@ -130,8 +139,40 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
         return param.length ? OVERRIDE_PATTERN_WITH_SUBSTITUTION.replace('${0}', param) : undefined;
     }
 
+    protected doUnsetSchema(changes: PreferenceProviderDataChange[]): PreferenceProviderDataChange[] {
+        const inverseChanges: PreferenceProviderDataChange[] = [];
+        for (const change of changes) {
+            const preferenceName = change.preferenceName;
+            const overridden = this.overriddenPreferenceName(preferenceName);
+            if (overridden) {
+                delete this.overridePatternProperties.properties[`[${overridden.overrideIdentifier}]`];
+                delete this.combinedSchema.properties[`[${overridden.overrideIdentifier}]`];
+            } else {
+                delete this.combinedSchema.properties[preferenceName];
+            }
+            const newValue = change.oldValue;
+            const oldValue = change.newValue;
+            const { scope, domain } = change;
+            const inverseChange: Mutable<PreferenceProviderDataChange> = { preferenceName, oldValue, scope, domain };
+            if (typeof newValue === undefined) {
+                delete this.preferences[preferenceName];
+            } else {
+                inverseChange.newValue = newValue;
+                this.preferences[preferenceName] = newValue;
+            }
+            inverseChanges.push(inverseChange);
+        }
+        return inverseChanges;
+    }
+
     protected doSetSchema(schema: PreferenceSchema): PreferenceProviderDataChange[] {
-        const scope = this.getScope();
+        const ajv = new Ajv();
+        const valid = ajv.validateSchema(schema);
+        if (!valid) {
+            const errors = !!ajv.errors ? ajv.errorsText(ajv.errors) : 'unknown validation error';
+            console.warn('A contributed preference schema has validation issues : ' + errors);
+        }
+        const scope = PreferenceScope.Default;
         const domain = this.getDomain();
         const changes: PreferenceProviderDataChange[] = [];
         const defaultScope = PreferenceSchema.getDefaultScope(schema);
@@ -149,11 +190,11 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
                 }
                 this.combinedSchema.properties[preferenceName] = schemaProps;
 
-                const value = schemaProps.default = this.getDefaultValue(schemaProps, preferenceName);
+                const value = schemaProps.defaultValue = this.getDefaultValue(schemaProps, preferenceName);
                 if (this.testOverrideValue(preferenceName, value)) {
-                    for (const overridenPreferenceName in value) {
-                        const overrideValue = value[overridenPreferenceName];
-                        const overridePreferenceName = `${preferenceName}.${overridenPreferenceName}`;
+                    for (const overriddenPreferenceName in value) {
+                        const overrideValue = value[overriddenPreferenceName];
+                        const overridePreferenceName = `${preferenceName}.${overriddenPreferenceName}`;
                         changes.push(this.doSetPreferenceValue(overridePreferenceName, overrideValue, { scope, domain }));
                     }
                 } else {
@@ -163,9 +204,10 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
         }
         return changes;
     }
+
     protected doSetPreferenceValue(preferenceName: string, newValue: any, { scope, domain }: {
         scope: PreferenceScope,
-        domain: string[]
+        domain?: string[]
     }): PreferenceProviderDataChange {
         const oldValue = this.preferences[preferenceName];
         this.preferences[preferenceName] = newValue;
@@ -180,7 +222,10 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
         if (preferenceName && FrontendApplicationPreferenceConfig.is(config) && preferenceName in config.preferences) {
             return config.preferences[preferenceName];
         }
-        if (property.default) {
+        if (property.defaultValue !== undefined) {
+            return property.defaultValue;
+        }
+        if (property.default !== undefined) {
             return property.default;
         }
         const type = Array.isArray(property.type) ? property.type[0] : property.type;
@@ -201,42 +246,54 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
         return null;
     }
 
-    protected updateValidate(): void {
-        this.validateFunction = new Ajv().compile(this.combinedSchema);
-    }
-
-    validate(name: string, value: any): boolean {
-        return this.validateFunction({ [name]: value }) as boolean;
-    }
-
     getCombinedSchema(): PreferenceDataSchema {
         return this.combinedSchema;
     }
 
-    setSchema(schema: PreferenceSchema): void {
+    setSchema(schema: PreferenceSchema): Disposable {
         const changes = this.doSetSchema(schema);
+        if (!changes.length) {
+            return Disposable.NULL;
+        }
         this.fireDidPreferenceSchemaChanged();
         this.emitPreferencesChangedEvent(changes);
+        return Disposable.create(() => {
+            const inverseChanges = this.doUnsetSchema(changes);
+            if (!inverseChanges.length) {
+                return;
+            }
+            this.fireDidPreferenceSchemaChanged();
+            this.emitPreferencesChangedEvent(inverseChanges);
+        });
     }
 
     getPreferences(): { [name: string]: any } {
         return this.preferences;
     }
 
-    async setPreference(): Promise<void> {
-        throw new Error('Unsupported');
-    }
-
-    canProvide(preferenceName: string, resourceUri?: string): { priority: number, provider: PreferenceProvider } {
-        return { priority: PreferenceProviderPriority.Default, provider: this };
+    async setPreference(): Promise<boolean> {
+        return false;
     }
 
     isValidInScope(preferenceName: string, scope: PreferenceScope): boolean {
-        const preference = this.getPreferenceProperty(preferenceName);
-        if (preference) {
-            return preference.scope! >= scope;
+        let property;
+        const overridden = this.overriddenPreferenceName(preferenceName);
+        if (overridden) {
+            // try from overriden schema
+            property = this.overridePatternProperties[`[${overridden.overrideIdentifier}]`];
+            property = property && property[overridden.preferenceName];
+            if (!property) {
+                // try from overriden identifier
+                property = this.overridePatternProperties[overridden.preferenceName];
+            }
+            if (!property) {
+                // try from overriden value
+                property = this.combinedSchema.properties[overridden.preferenceName];
+            }
+        } else {
+            property = this.combinedSchema.properties[preferenceName];
         }
-        return false;
+        return property && property.scope! >= scope;
     }
 
     *getPreferenceNames(): IterableIterator<string> {
@@ -257,15 +314,10 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
         }
     }
 
-    getPreferenceProperty(preferenceName: string): PreferenceItem | undefined {
-        const overriden = this.overridenPreferenceName(preferenceName);
-        return this.combinedSchema.properties[overriden ? overriden.preferenceName : preferenceName];
-    }
-
     overridePreferenceName({ preferenceName, overrideIdentifier }: OverridePreferenceName): string {
         return `[${overrideIdentifier}].${preferenceName}`;
     }
-    overridenPreferenceName(name: string): OverridePreferenceName | undefined {
+    overriddenPreferenceName(name: string): OverridePreferenceName | undefined {
         const index = name.indexOf('.');
         if (index === -1) {
             return undefined;

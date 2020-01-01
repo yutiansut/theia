@@ -14,7 +14,7 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { injectable, inject } from 'inversify';
+import { injectable, inject, postConstruct } from 'inversify';
 import { ContextKeyService, ContextKey } from '@theia/core/lib/browser/context-key-service';
 
 @injectable()
@@ -22,6 +22,15 @@ export class MonacoContextKeyService extends ContextKeyService {
 
     @inject(monaco.contextKeyService.ContextKeyService)
     protected readonly contextKeyService: monaco.contextKeyService.ContextKeyService;
+
+    @postConstruct()
+    protected init(): void {
+        this.contextKeyService.onDidChangeContext(e =>
+            this.fireDidChange({
+                affects: keys => e.affectsSome(keys)
+            })
+        );
+    }
 
     createKey<T>(key: string, defaultValue: T | undefined): ContextKey<T> {
         return this.contextKeyService.createKey(key, defaultValue);
@@ -47,6 +56,10 @@ export class MonacoContextKeyService extends ContextKeyService {
             this.expressions.set(when, expression);
         }
         return expression;
+    }
+
+    parseKeys(expression: string): Set<string> {
+        return new Set<string>(monaco.contextkey.ContextKeyExpr.deserialize(expression).keys());
     }
 
 }

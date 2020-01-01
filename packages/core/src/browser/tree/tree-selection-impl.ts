@@ -17,7 +17,7 @@
 import { injectable, inject, postConstruct } from 'inversify';
 import { Tree, TreeNode } from './tree';
 import { Event, Emitter } from '../../common';
-import { TreeSelectionState } from './tree-selection-state';
+import { TreeSelectionState, FocusableTreeSelection } from './tree-selection-state';
 import { TreeSelectionService, SelectableTreeNode, TreeSelection } from './tree-selection';
 
 @injectable()
@@ -34,7 +34,7 @@ export class TreeSelectionServiceImpl implements TreeSelectionService {
         this.state = new TreeSelectionState(this.tree);
     }
 
-    dispose() {
+    dispose(): void {
         this.onSelectionChangedEmitter.dispose();
     }
 
@@ -59,20 +59,24 @@ export class TreeSelectionServiceImpl implements TreeSelectionService {
                     ...arg
                 };
             }
-            const node = arg;
             return {
                 type,
-                node
+                node: arg
             };
         })(selectionOrTreeNode);
 
-        if (this.validateNode(selection.node) === undefined) {
+        const node = this.validateNode(selection.node);
+        if (node === undefined) {
             return;
         }
+        Object.assign(selection, { node });
 
-        const oldState = this.state;
         const newState = this.state.nextState(selection);
-        const oldNodes = oldState.selection();
+        this.transiteTo(newState);
+    }
+
+    protected transiteTo(newState: TreeSelectionState): void {
+        const oldNodes = this.state.selection();
         const newNodes = newState.selection();
 
         const toUnselect = this.difference(oldNodes, newNodes);
@@ -117,7 +121,47 @@ export class TreeSelectionServiceImpl implements TreeSelectionService {
      * Returns a reference to the argument if the node exists in the tree. Otherwise, `undefined`.
      */
     protected validateNode(node: Readonly<TreeNode>): Readonly<TreeNode> | undefined {
-        return this.tree.validateNode(node);
+        const result = this.tree.validateNode(node);
+        return SelectableTreeNode.is(result) ? result : undefined;
     }
 
+    storeState(): TreeSelectionServiceImpl.State {
+        return {
+            selectionStack: this.state.selectionStack.map(s => ({
+                focus: s.focus && s.focus.id || undefined,
+                node: s.node && s.node.id || undefined,
+                type: s.type
+            }))
+        };
+    }
+
+    restoreState(state: TreeSelectionServiceImpl.State): void {
+        const selectionStack: FocusableTreeSelection[] = [];
+        for (const selection of state.selectionStack) {
+            const node = selection.node && this.tree.getNode(selection.node) || undefined;
+            if (!SelectableTreeNode.is(node)) {
+                break;
+            }
+            const focus = selection.focus && this.tree.getNode(selection.focus) || undefined;
+            selectionStack.push({
+                node,
+                focus: SelectableTreeNode.is(focus) && focus || undefined,
+                type: selection.type
+            });
+        }
+        if (selectionStack.length) {
+            this.transiteTo(new TreeSelectionState(this.tree, selectionStack));
+        }
+    }
+
+}
+export namespace TreeSelectionServiceImpl {
+    export interface State {
+        selectionStack: ReadonlyArray<FocusableTreeSelectionState>
+    }
+    export interface FocusableTreeSelectionState {
+        focus?: string
+        node?: string
+        type?: TreeSelection.SelectionType
+    }
 }

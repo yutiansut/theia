@@ -18,7 +18,7 @@ import { injectable } from 'inversify';
 import { v4 } from 'uuid';
 import URI from '@theia/core/lib/common/uri';
 import { Location } from '@theia/editor/lib/browser/editor';
-import { TreeDecoration } from '@theia/core/lib/browser/tree/tree-decorator';
+import { TreeDecoration, DecoratedTreeNode } from '@theia/core/lib/browser/tree/tree-decorator';
 import { TreeImpl, TreeNode, CompositeTreeNode, ExpandableTreeNode, SelectableTreeNode } from '@theia/core/lib/browser/tree';
 import { TypeHierarchyItem } from '@theia/languages/lib/browser/typehierarchy/typehierarchy-protocol';
 import { TypeHierarchyDirection, ResolveTypeHierarchyItemParams } from '@theia/languages/lib/browser/typehierarchy/typehierarchy-protocol';
@@ -113,7 +113,7 @@ export namespace TypeHierarchyTree {
 
     }
 
-    export interface Node extends CompositeTreeNode, ExpandableTreeNode, SelectableTreeNode, TreeDecoration.DecoratedTreeNode {
+    export interface Node extends CompositeTreeNode, ExpandableTreeNode, SelectableTreeNode, DecoratedTreeNode {
         readonly item: TypeHierarchyItem;
         resolved: boolean;
     }
@@ -161,20 +161,20 @@ export namespace TypeHierarchyTree {
             const captionSuffixes: TreeDecoration.CaptionAffix[] = [{
                 data: new URI(item.uri).displayName,
                 fontData: {
-                    color: 'var(--theia-ui-font-color2)',
+                    color: 'var(--theia-descriptionForeground)',
                 }
             }];
             if (item.detail) {
                 captionSuffixes.unshift({
                     data: item.detail,
                     fontData: {
-                        color: 'var(--theia-accent-color0)',
+                        color: 'var(--theia-list-highlightForeground)',
                         style: 'italic'
                     }
                 });
             }
             const data = `${TypeHierarchyDirection.Children === direction ? '▼' : '▲'}`;
-            const color = `var(${TypeHierarchyDirection.Children === direction ? '--theia-error-color2' : '--theia-success-color2'})`;
+            const color = `var(${TypeHierarchyDirection.Children === direction ? '--theia-errorForeground' : '--theia-successBackground'})`;
             return {
                 captionSuffixes,
                 captionPrefixes: [{

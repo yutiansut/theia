@@ -21,6 +21,7 @@ import { TheiaPluginScanner } from '@theia/plugin-ext/lib/hosted/node/scanners/s
 @injectable()
 export class VsCodePluginScanner extends TheiaPluginScanner implements PluginScanner {
     private readonly VSCODE_TYPE: PluginEngine = 'vscode';
+    private readonly VSCODE_PREFIX: string = 'vscode:extension/';
 
     get apiType(): PluginEngine {
         return this.VSCODE_TYPE;
@@ -28,7 +29,9 @@ export class VsCodePluginScanner extends TheiaPluginScanner implements PluginSca
 
     getModel(plugin: PluginPackage): PluginModel {
         const result: PluginModel = {
-            id: `${plugin.publisher}.${plugin.name}`,
+            packagePath: plugin.packagePath,
+            // see id definition: https://github.com/microsoft/vscode/blob/15916055fe0cb9411a5f36119b3b012458fe0a1d/src/vs/platform/extensions/common/extensions.ts#L167-L169
+            id: `${plugin.publisher.toLowerCase()}.${plugin.name.toLowerCase()}`,
             name: plugin.name,
             publisher: plugin.publisher,
             version: plugin.version,
@@ -42,8 +45,27 @@ export class VsCodePluginScanner extends TheiaPluginScanner implements PluginSca
                 backend: plugin.main
             }
         };
-        result.contributes = this.readContributions(plugin);
         return result;
+    }
+
+    /**
+     * Maps extension dependencies to deployable extension dependencies.
+     */
+    getDependencies(plugin: PluginPackage): Map<string, string> | undefined {
+        // Store the list of dependencies.
+        const dependencies = new Map<string, string>();
+        // Iterate through the list of dependencies from `extensionDependencies` and `extensionPack`.
+        for (const dependency of [plugin.extensionDependencies, plugin.extensionPack]) {
+            if (dependency !== undefined) {
+                // Iterate over the list of dependencies present, and add them to the collection.
+                dependency.forEach((dep: string) => {
+                    const dependencyId = dep.toLowerCase();
+                    dependencies.set(dependencyId, this.VSCODE_PREFIX + dependencyId);
+                });
+            }
+        }
+        // Return the map of dependencies if present, else `undefined`.
+        return dependencies.size > 0 ? dependencies : undefined ;
     }
 
     getLifecycle(plugin: PluginPackage): PluginLifecycle {
@@ -54,4 +76,5 @@ export class VsCodePluginScanner extends TheiaPluginScanner implements PluginSca
             backendInitPath: __dirname + '/plugin-vscode-init.js'
         };
     }
+
 }

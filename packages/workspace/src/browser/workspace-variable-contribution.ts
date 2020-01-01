@@ -16,8 +16,11 @@
 
 import { injectable, inject, postConstruct } from 'inversify';
 import URI from '@theia/core/lib/common/uri';
+import { Path } from '@theia/core/lib/common/path';
+import { FileSystem } from '@theia/filesystem/lib/common';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { ApplicationShell, NavigatableWidget } from '@theia/core/lib/browser';
-import { VariableContribution, VariableRegistry } from '@theia/variable-resolver/lib/browser';
+import { VariableContribution, VariableRegistry, Variable } from '@theia/variable-resolver/lib/browser';
 import { WorkspaceService } from './workspace-service';
 
 @injectable()
@@ -27,6 +30,8 @@ export class WorkspaceVariableContribution implements VariableContribution {
     protected readonly workspaceService: WorkspaceService;
     @inject(ApplicationShell)
     protected readonly shell: ApplicationShell;
+    @inject(FileSystem)
+    protected readonly fileSystem: FileSystem;
 
     protected currentWidget: NavigatableWidget | undefined;
 
@@ -38,41 +43,32 @@ export class WorkspaceVariableContribution implements VariableContribution {
     protected updateCurrentWidget(): void {
         const { currentWidget } = this.shell;
         if (NavigatableWidget.is(currentWidget)) {
-            this.currentWidget = currentWidget;
+            this.setCurrentWidget(currentWidget);
+        }
+    }
+
+    protected readonly toDiposeOnUpdateCurrentWidget = new DisposableCollection();
+    protected setCurrentWidget(currentWidget: NavigatableWidget | undefined): void {
+        this.toDiposeOnUpdateCurrentWidget.dispose();
+        this.currentWidget = currentWidget;
+        if (currentWidget) {
+            const resetCurrentWidget = () => this.setCurrentWidget(undefined);
+            currentWidget.disposed.connect(resetCurrentWidget);
+            this.toDiposeOnUpdateCurrentWidget.push(Disposable.create(() =>
+                currentWidget.disposed.disconnect(resetCurrentWidget)
+            ));
         }
     }
 
     registerVariables(variables: VariableRegistry): void {
-        variables.registerVariable({
-            name: 'workspaceRoot',
-            description: 'The path of the workspace root folder',
-            resolve: (context?: URI) => {
-                const uri = this.getWorkspaceRootUri(context);
-                return uri && uri.path.toString();
-            }
-        });
-        variables.registerVariable({
-            name: 'workspaceFolder',
-            description: 'The path of the workspace root folder',
-            resolve: (context?: URI) => {
-                const uri = this.getWorkspaceRootUri(context);
-                return uri && uri.path.toString();
-            }
-        });
-        variables.registerVariable({
-            name: 'workspaceFolderBasename',
-            description: 'The name of the workspace root folder',
-            resolve: (context?: URI) => {
-                const uri = this.getWorkspaceRootUri(context);
-                return uri && uri.displayName;
-            }
-        });
+        this.registerWorkspaceRootVariables(variables);
+
         variables.registerVariable({
             name: 'file',
             description: 'The path of the currently opened file',
             resolve: () => {
                 const uri = this.getResourceUri();
-                return uri && uri.path.toString();
+                return uri && this.fileSystem.getFsPath(uri.toString());
             }
         });
         variables.registerVariable({
@@ -107,27 +103,89 @@ export class WorkspaceVariableContribution implements VariableContribution {
                 return uri && uri.path.ext;
             }
         });
-        variables.registerVariable({
-            name: 'relativeFile',
-            description: "The currently opened file's path relative to the workspace root",
-            resolve: () => {
-                const uri = this.getResourceUri();
-                return uri && this.getWorkspaceRelativePath(uri);
-            }
-        });
     }
 
-    protected getWorkspaceRootUri(uri: URI | undefined = this.getResourceUri()): URI | undefined {
+    protected registerWorkspaceRootVariables(variables: VariableRegistry): void {
+        const scoped = (variable: Variable): Variable => ({
+            name: variable.name,
+            description: variable.description,
+            resolve: (context, workspaceRootName) => {
+                const workspaceRoot = workspaceRootName && this.workspaceService.tryGetRoots().find(r => new URI(r.uri).path.name === workspaceRootName);
+                return variable.resolve(workspaceRoot ? new URI(workspaceRoot.uri) : context);
+            }
+        });
+        variables.registerVariable(scoped({
+            name: 'workspaceRoot',
+            description: 'The path of the workspace root folder',
+            resolve: (context?: URI) => {
+                const uri = this.getWorkspaceRootUri(context);
+                return uri && this.fileSystem.getFsPath(uri.toString());
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'workspaceFolder',
+            description: 'The path of the workspace root folder',
+            resolve: (context?: URI) => {
+                const uri = this.getWorkspaceRootUri(context);
+                return uri && this.fileSystem.getFsPath(uri.toString());
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'workspaceRootFolderName',
+            description: 'The name of the workspace root folder',
+            resolve: (context?: URI) => {
+                const uri = this.getWorkspaceRootUri(context);
+                return uri && uri.displayName;
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'workspaceFolderBasename',
+            description: 'The name of the workspace root folder',
+            resolve: (context?: URI) => {
+                const uri = this.getWorkspaceRootUri(context);
+                return uri && uri.displayName;
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'cwd',
+            description: "The task runner's current working directory on startup",
+            resolve: (context?: URI) => {
+                const uri = this.getWorkspaceRootUri(context);
+                return (uri && this.fileSystem.getFsPath(uri.toString())) || '';
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'relativeFile',
+            description: "The currently opened file's path relative to the workspace root",
+            resolve: (context?: URI) => {
+                const uri = this.getResourceUri();
+                return uri && this.getWorkspaceRelativePath(uri, context);
+            }
+        }));
+        variables.registerVariable(scoped({
+            name: 'relativeFileDirname',
+            description: "The current opened file's dirname relative to ${workspaceFolder}",
+            resolve: (context?: URI) => {
+                const uri = this.getResourceUri();
+                const relativePath = uri && this.getWorkspaceRelativePath(uri, context);
+                return relativePath && new Path(relativePath).dir.toString();
+            }
+        }));
+    }
+
+    getWorkspaceRootUri(uri: URI | undefined = this.getResourceUri()): URI | undefined {
         return this.workspaceService.getWorkspaceRootUri(uri);
     }
 
-    protected getResourceUri(): URI | undefined {
+    getResourceUri(): URI | undefined {
+        // TODO replace with ResourceContextKey.get?
         return this.currentWidget && this.currentWidget.getResourceUri();
     }
 
-    getWorkspaceRelativePath(uri: URI): string | undefined {
-        const workspaceRootUri = this.getWorkspaceRootUri(uri);
+    getWorkspaceRelativePath(uri: URI, context?: URI): string | undefined {
+        const workspaceRootUri = this.getWorkspaceRootUri(context || uri);
         const path = workspaceRootUri && workspaceRootUri.path.relative(uri.path);
         return path && path.toString();
     }
+
 }

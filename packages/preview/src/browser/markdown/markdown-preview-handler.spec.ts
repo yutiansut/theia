@@ -107,26 +107,26 @@ describe('markdown-preview-handler', () => {
     });
 });
 
-async function assertRenderedContent(source: string, expectation: string) {
-    const contentElement = await previewHandler.renderContent({ content: source, originUri: new URI('file:///workspace/DEMO.md') });
+async function assertRenderedContent(source: string, expectation: string): Promise<void> {
+    const contentElement = previewHandler.renderContent({ content: source, originUri: new URI('file:///workspace/DEMO.md') });
     expect(contentElement.innerHTML).equals(expectation);
 }
 
 const exampleMarkdown1 = //
     `# Theia - Preview Extension
 Shows a preview of supported resources.
-See [here](https://github.com/theia-ide/theia).
+See [here](https://github.com/eclipse-theia/theia).
 
 ## License
-[Apache-2.0](https://github.com/theia-ide/theia/blob/master/LICENSE)
+[Apache-2.0](https://github.com/eclipse-theia/theia/blob/master/LICENSE)
 `;
 
 const exampleHtml1 = //
     `<h1 id="theia---preview-extension" class="line" data-line="0">Theia - Preview Extension</h1>
 <p class="line" data-line="1">Shows a preview of supported resources.
-See <a href="https://github.com/theia-ide/theia">here</a>.</p>
+See <a href="https://github.com/eclipse-theia/theia">here</a>.</p>
 <h2 id="license" class="line" data-line="4">License</h2>
-<p class="line" data-line="5"><a href="https://github.com/theia-ide/theia/blob/master/LICENSE">Apache-2.0</a></p>
+<p class="line" data-line="5"><a href="https://github.com/eclipse-theia/theia/blob/master/LICENSE">Apache-2.0</a></p>
 `;
 
 const exampleMarkdown2 = //
@@ -188,13 +188,14 @@ const exampleHtml5 = //
 /**
  * `offsetTop` of elements to be `sourceLine` number times `20`.
  */
-function mockOffsetProperties() {
+function mockOffsetProperties(): void {
     Object.defineProperties(HTMLElement.prototype, {
         offsetLeft: {
             get: () => 0
         },
         offsetTop: {
-            get: function () {
+            // tslint:disable-next-line:no-any
+            get: function (): any {
                 const element = this as HTMLElement;
                 const line = Number.parseInt(element.getAttribute('data-line') || '0');
                 return offsetForLine(line);
@@ -209,6 +210,6 @@ function mockOffsetProperties() {
     });
 }
 
-function offsetForLine(line: number) {
+function offsetForLine(line: number): number {
     return line * 20;
 }

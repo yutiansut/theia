@@ -16,15 +16,16 @@
 
 import { inject, injectable, postConstruct } from 'inversify';
 import URI from '@theia/core/lib/common/uri';
-import { StatefulWidget, SELECTED_CLASS, DiffUris } from '@theia/core/lib/browser';
+import { StatefulWidget, DiffUris, Message } from '@theia/core/lib/browser';
 import { EditorManager, EditorOpenerOptions, EditorWidget, DiffNavigatorProvider, DiffNavigator } from '@theia/editor/lib/browser';
 import { GitFileChange, GitFileStatus, Git, WorkingDirectoryStatus } from '../../common';
 import { GitWatcher } from '../../common';
 import { GIT_RESOURCE_SCHEME } from '../git-resource';
-import { GitNavigableListWidget } from '../git-navigable-list-widget';
+import { GitNavigableListWidget, GitItemComponent } from '../git-navigable-list-widget';
 import { GitFileChangeNode } from '../git-file-change-node';
-import { Message } from '@phosphor/messaging';
+import { Deferred } from '@theia/core/lib/common/promise-util';
 import * as React from 'react';
+import { MaybePromise } from '@theia/core/lib/common/types';
 
 // tslint:disable:no-null-keyword
 
@@ -40,6 +41,8 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
     protected gitStatus?: WorkingDirectoryStatus;
 
     protected listView?: GitDiffListContainer;
+
+    protected deferredListContainer = new Deferred<HTMLElement>();
 
     @inject(Git) protected readonly git: Git;
     @inject(DiffNavigatorProvider) protected readonly diffNavigatorProvider: DiffNavigatorProvider;
@@ -59,23 +62,33 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
     }
 
     @postConstruct()
-    protected init() {
+    protected init(): void {
         this.toDispose.push(this.gitWatcher.onGitEvent(async gitEvent => {
             if (this.options) {
                 this.setContent(this.options);
             }
         }));
+        this.toDispose.push(this.labelProvider.onDidChange(event => {
+            const affectsFiles = this.fileChangeNodes.some(node => event.affects(new URI(node.uri)));
+            if (this.options && affectsFiles) {
+                this.setContent(this.options);
+            }
+        }));
     }
 
-    protected get toRevision() {
+    protected getScrollContainer(): MaybePromise<HTMLElement> {
+        return this.deferredListContainer.promise;
+    }
+
+    protected get toRevision(): string | undefined {
         return this.options.range && this.options.range.toRevision;
     }
 
-    protected get fromRevision() {
+    protected get fromRevision(): string | number | undefined {
         return this.options.range && this.options.range.fromRevision;
     }
 
-    async setContent(options: Git.Options.Diff) {
+    async setContent(options: Git.Options.Diff): Promise<void> {
         this.options = options;
         const repository = this.repositoryProvider.findRepositoryOrSelected(options);
         if (repository) {
@@ -83,21 +96,7 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
                 range: options.range,
                 uri: options.uri
             });
-            const fileChangeNodes: GitFileChangeNode[] = [];
-            for (const fileChange of fileChanges) {
-                const fileChangeUri = new URI(fileChange.uri);
-                const [icon, label, description] = await Promise.all([
-                    this.labelProvider.getIcon(fileChangeUri),
-                    this.labelProvider.getName(fileChangeUri),
-                    this.relativePath(fileChangeUri.parent)
-                ]);
-
-                const caption = this.computeCaption(fileChange);
-                fileChangeNodes.push({
-                    ...fileChange, icon, label, description, caption
-                });
-            }
-            this.fileChangeNodes = fileChangeNodes;
+            this.fileChangeNodes = fileChanges;
             this.update();
         }
     }
@@ -153,13 +152,14 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
 
     protected renderPathHeader(): React.ReactNode {
         return this.renderHeaderRow({
+            classNames: ['diff-header'],
             name: 'path',
             value: this.renderPath()
         });
     }
     protected renderPath(): React.ReactNode {
         if (this.options.uri) {
-            const path = this.relativePath(this.options.uri);
+            const path = this.gitLabelProvider.relativePath(this.options.uri);
             if (path.length > 0) {
                 return '/' + path;
             } else {
@@ -171,6 +171,7 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
 
     protected renderRevisionHeader(): React.ReactNode {
         return this.renderHeaderRow({
+            classNames: ['diff-header'],
             name: 'revision: ',
             value: this.renderRevision()
         });
@@ -191,16 +192,16 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
             this.renderNavigationRight()
         );
     }
-    protected doRenderToolbar(...children: React.ReactNode[]) {
+    protected doRenderToolbar(...children: React.ReactNode[]): React.ReactNode {
         return this.renderHeaderRow({
-            classNames: ['space-between'],
+            classNames: ['diff-nav', 'space-between'],
             name: 'Files changed',
             value: <div className='lrBtns'>{...children}</div>
         });
     }
 
     protected readonly showPreviousChange = () => this.doShowPreviousChange();
-    protected doShowPreviousChange() {
+    protected doShowPreviousChange(): void {
         this.navigateLeft();
     }
 
@@ -209,7 +210,7 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
     }
 
     protected readonly showNextChange = () => this.doShowNextChange();
-    protected doShowNextChange() {
+    protected doShowNextChange(): void {
         this.navigateRight();
     }
 
@@ -230,11 +231,14 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
             ref={ref => this.listView = ref || undefined}
             id={this.scrollContainer}
             files={files}
-            addDiffListKeyListeners={this.addGitDiffListKeyListeners} />;
+            addDiffListKeyListeners={this.addGitDiffListKeyListeners}
+            setListContainer={this.setListContainer} />;
     }
 
+    protected setListContainer = (listContainerElement: HTMLDivElement) => this.deferredListContainer.resolve(listContainerElement);
+
     protected addGitDiffListKeyListeners = (id: string) => this.doAddGitDiffListKeyListeners(id);
-    protected doAddGitDiffListKeyListeners(id: string) {
+    protected doAddGitDiffListKeyListeners(id: string): void {
         const container = document.getElementById(id);
         if (container) {
             this.addGitListNavigationKeyListeners(container);
@@ -242,32 +246,13 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
     }
 
     protected renderGitItem(change: GitFileChangeNode): React.ReactNode {
-        return <div key={change.uri.toString()} className={`gitItem noselect${change.selected ? ' ' + SELECTED_CLASS : ''}`}>
-            <div
-                title={change.caption}
-                className='noWrapInfo'
-                onDoubleClick={() => {
-                    this.revealChange(change);
-                }}
-                onClick={() => {
-                    this.selectNode(change);
-                }}>
-                <span className={change.icon + ' file-icon'}></span>
-                <span className='name'>{change.label + ' '}</span>
-                <span className='path'>{change.description}</span>
-            </div>
-            {
-                change.extraIconClassName ? <div
-                    title={change.caption}
-                    className={change.extraIconClassName}></div>
-                    : ''
-            }
-            <div
-                title={change.caption}
-                className={'status staged ' + GitFileStatus[change.status].toLowerCase()}>
-                {this.getStatusCaption(change.status, true).charAt(0)}
-            </div>
-        </div>;
+        return <GitItemComponent key={change.uri.toString()} {...{
+            labelProvider: this.labelProvider,
+            gitLabelProvider: this.gitLabelProvider,
+            change,
+            revealChange: () => this.revealChange(change),
+            selectNode: () => this.selectNode(change)
+        }} />;
     }
 
     protected navigateRight(): void {
@@ -313,7 +298,7 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
         }
     }
 
-    protected selectNextNode() {
+    protected selectNextNode(): void {
         const idx = this.indexOfSelected;
         if (idx >= 0 && idx < this.gitNodes.length - 1) {
             this.selectNode(this.gitNodes[idx + 1]);
@@ -322,7 +307,7 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
         }
     }
 
-    protected selectPreviousNode() {
+    protected selectPreviousNode(): void {
         const idx = this.indexOfSelected;
         if (idx > 0) {
             this.selectNode(this.gitNodes[idx - 1]);
@@ -371,7 +356,7 @@ export class GitDiffWidget extends GitNavigableListWidget<GitFileChangeNode> imp
         } else if (change.status === GitFileStatus.New) {
             uriToOpen = toURI;
         } else {
-            uriToOpen = DiffUris.encode(fromURI, toURI, uri.displayName);
+            uriToOpen = DiffUris.encode(fromURI, toURI);
         }
         return uriToOpen;
     }
@@ -398,24 +383,28 @@ export namespace GitDiffListContainer {
         id: string
         files: React.ReactNode[]
         addDiffListKeyListeners: (id: string) => void
+        setListContainer: (listContainer: HTMLDivElement) => void
     }
 }
 
 export class GitDiffListContainer extends React.Component<GitDiffListContainer.Props> {
     protected listContainer?: HTMLDivElement;
 
-    render() {
+    render(): JSX.Element {
         const { id, files } = this.props;
         return <div ref={ref => this.listContainer = ref || undefined} className='listContainer filesChanged' id={id} tabIndex={0}>{...files}</div>;
     }
 
-    componentDidMount() {
+    componentDidMount(): void {
         this.props.addDiffListKeyListeners(this.props.id);
+        if (this.listContainer) {
+            this.props.setListContainer(this.listContainer);
+        }
     }
 
-    focus() {
+    focus(): void {
         if (this.listContainer) {
-            this.listContainer.focus();
+            this.listContainer.focus({ preventScroll: true });
         }
     }
 }

@@ -15,7 +15,8 @@
  ********************************************************************************/
 
 import { injectable, postConstruct, inject } from 'inversify';
-import { ApplicationPackage } from '@theia/application-package';
+import *  as path from 'path';
+import { ApplicationPackage, environment } from '@theia/application-package';
 import { BaseLanguageServerContribution, IConnection, LanguageServerStartOptions } from '@theia/languages/lib/node';
 import { TYPESCRIPT_LANGUAGE_ID, TYPESCRIPT_LANGUAGE_NAME, TypescriptStartParams } from '../common';
 import { TypeScriptPlugin, TypeScriptInitializeParams, TypeScriptInitializationOptions } from 'typescript-language-server/lib/ts-protocol';
@@ -54,16 +55,18 @@ export class TypeScriptContribution extends BaseLanguageServerContribution {
     }
 
     async start(clientConnection: IConnection, { parameters }: TypeScriptStartOptions): Promise<void> {
-        const command = 'node';
+        // Re-use the same tool used to launch Theia. e.g. for an Electron Theia packaging,
+        // this will be "electron" executable that is bundled with the application.
+        const command = process.execPath;
         const args: string[] = [
-            __dirname + '/startserver.js',
+            path.join(__dirname, 'startserver.js'),
             '--stdio'
         ];
         const tsServerPath = TypescriptVersionURI.getTsServerPath(parameters && parameters.version);
         if (tsServerPath) {
             args.push(`--tsserver-path=${tsServerPath}`);
         }
-        const serverConnection = await this.createProcessStreamConnectionAsync(command, args);
+        const serverConnection = await this.createProcessStreamConnectionAsync(command, args, { env: environment.electron.runAsNodeEnv() });
         this.forward(clientConnection, serverConnection);
     }
 

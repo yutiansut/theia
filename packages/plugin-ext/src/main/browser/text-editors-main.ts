@@ -14,6 +14,7 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+import URI from 'vscode-uri';
 import {
     TextEditorsMain,
     MAIN_RPC_CONTEXT,
@@ -25,45 +26,55 @@ import {
     ApplyEditsOptions,
     UndoStopOptions,
     DecorationRenderOptions,
+    ThemeDecorationInstanceRenderOptions,
     DecorationOptions,
     WorkspaceEditDto
-} from '../../api/plugin-api';
-import { Range } from '../../api/model';
+} from '../../common/plugin-api-rpc';
+import { Range } from '../../common/plugin-api-rpc-model';
 import { EditorsAndDocumentsMain } from './editors-and-documents-main';
-import { RPCProtocol } from '../../api/rpc-protocol';
-import { DisposableCollection } from '@theia/core';
+import { RPCProtocol } from '../../common/rpc-protocol';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { TextEditorMain } from './text-editor-main';
 import { disposed } from '../../common/errors';
-import { reviveWorkspaceEditDto } from './languages-main';
+import { toMonacoWorkspaceEdit } from './languages-main';
 import { MonacoBulkEditService } from '@theia/monaco/lib/browser/monaco-bulk-edit-service';
+import { MonacoEditorService } from '@theia/monaco/lib/browser/monaco-editor-service';
+import { theiaUritoUriComponents, UriComponents } from '../../common/uri-components';
+import { Endpoint } from '@theia/core/lib/browser/endpoint';
 
-export class TextEditorsMainImpl implements TextEditorsMain {
+export class TextEditorsMainImpl implements TextEditorsMain, Disposable {
 
-    private toDispose = new DisposableCollection();
-    private proxy: TextEditorsExt;
-    private editorsToDispose = new Map<string, DisposableCollection>();
+    private readonly proxy: TextEditorsExt;
+    private readonly toDispose = new DisposableCollection();
+    private readonly editorsToDispose = new Map<string, DisposableCollection>();
+    private readonly fileEndpoint = new Endpoint({ path: 'file' }).getRestUrl();
 
-    constructor(private readonly editorsAndDocuments: EditorsAndDocumentsMain,
-                rpc: RPCProtocol,
-                private readonly bulkEditService:  MonacoBulkEditService) {
+    constructor(
+        private readonly editorsAndDocuments: EditorsAndDocumentsMain,
+        rpc: RPCProtocol,
+        private readonly bulkEditService: MonacoBulkEditService,
+        private readonly monacoEditorService: MonacoEditorService,
+    ) {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.TEXT_EDITORS_EXT);
+        this.toDispose.push(editorsAndDocuments);
         this.toDispose.push(editorsAndDocuments.onTextEditorAdd(editors => editors.forEach(this.onTextEditorAdd, this)));
         this.toDispose.push(editorsAndDocuments.onTextEditorRemove(editors => editors.forEach(this.onTextEditorRemove, this)));
     }
 
     dispose(): void {
-        this.editorsToDispose.forEach(val => val.dispose());
-        this.editorsToDispose = new Map();
         this.toDispose.dispose();
     }
 
     private onTextEditorAdd(editor: TextEditorMain): void {
         const id = editor.getId();
-        const toDispose = new DisposableCollection();
-        toDispose.push(editor.onPropertiesChangedEvent(e => {
-            this.proxy.$acceptEditorPropertiesChanged(id, e);
-        }));
+        const toDispose = new DisposableCollection(
+            editor.onPropertiesChangedEvent(e => {
+                this.proxy.$acceptEditorPropertiesChanged(id, e);
+            }),
+            Disposable.create(() => this.editorsToDispose.delete(id))
+        );
         this.editorsToDispose.set(id, toDispose);
+        this.toDispose.push(toDispose);
     }
 
     private onTextEditorRemove(id: string): void {
@@ -71,7 +82,6 @@ export class TextEditorsMainImpl implements TextEditorsMain {
         if (disposables) {
             disposables.dispose();
         }
-        this.editorsToDispose.delete(id);
     }
 
     $trySetOptions(id: string, options: TextEditorConfigurationUpdate): Promise<void> {
@@ -108,9 +118,9 @@ export class TextEditorsMainImpl implements TextEditorsMain {
     }
 
     $tryApplyWorkspaceEdit(dto: WorkspaceEditDto): Promise<boolean> {
-        const edits  = reviveWorkspaceEditDto(dto);
+        const edits = toMonacoWorkspaceEdit(dto);
         return new Promise(resolve => {
-            this.bulkEditService.apply( edits).then(() => resolve(true), err => resolve(false));
+            this.bulkEditService.apply(edits).then(() => resolve(true), err => resolve(false));
         });
     }
 
@@ -122,11 +132,38 @@ export class TextEditorsMainImpl implements TextEditorsMain {
     }
 
     $registerTextEditorDecorationType(key: string, options: DecorationRenderOptions): void {
-        monaco.services.StaticServices.codeEditorService.get().registerDecorationType(key, options);
+        this.injectRemoteUris(options);
+        this.monacoEditorService.registerDecorationType(key, options);
+        this.toDispose.push(Disposable.create(() => this.$removeTextEditorDecorationType(key)));
+    }
+
+    protected injectRemoteUris(options: DecorationRenderOptions | ThemeDecorationInstanceRenderOptions): void {
+        if (options.before) {
+            options.before.contentIconPath = this.toRemoteUri(options.before.contentIconPath);
+        }
+        if (options.after) {
+            options.after.contentIconPath = this.toRemoteUri(options.after.contentIconPath);
+        }
+        if ('gutterIconPath' in options) {
+            options.gutterIconPath = this.toRemoteUri(options.gutterIconPath);
+        }
+        if ('dark' in options && options.dark) {
+            this.injectRemoteUris(options.dark);
+        }
+        if ('light' in options && options.light) {
+            this.injectRemoteUris(options.light);
+        }
+    }
+
+    protected toRemoteUri(uri?: UriComponents): UriComponents | undefined {
+        if (uri && uri.scheme === 'file') {
+            return theiaUritoUriComponents(this.fileEndpoint.withQuery(URI.revive(uri).toString()));
+        }
+        return uri;
     }
 
     $removeTextEditorDecorationType(key: string): void {
-        monaco.services.StaticServices.codeEditorService.get().removeDecorationType(key);
+        this.monacoEditorService.removeDecorationType(key);
     }
 
     $trySetDecorations(id: string, key: string, ranges: DecorationOptions[]): Promise<void> {

@@ -16,10 +16,10 @@
 
 import * as React from 'react';
 import { DebugProtocol } from 'vscode-debugprotocol/lib/debugProtocol';
-import { MessageType } from '@theia/core/lib/common';
 import { SingleTextInputDialog } from '@theia/core/lib/browser';
 import { ConsoleItem, CompositeConsoleItem } from '@theia/console/lib/browser/console-session';
 import { DebugSession } from '../debug-session';
+import { Severity } from '@theia/core/lib/common/severity';
 
 export class ExpressionContainer implements CompositeConsoleItem {
 
@@ -104,7 +104,7 @@ export class ExpressionContainer implements CompositeConsoleItem {
             }
         } catch (e) {
             result.push({
-                severity: MessageType.Error,
+                severity: Severity.Error,
                 visible: !!e.message,
                 render: () => e.message
             });
@@ -191,6 +191,7 @@ export class DebugVariable extends ExpressionContainer {
             this.variablesReference = response.body.variablesReference || 0;
             this.namedVariables = response.body.namedVariables;
             this.indexedVariables = response.body.indexedVariables;
+            this.elements = undefined;
             this.session['fireDidChange']();
         } catch (error) {
             console.error(error);
@@ -256,6 +257,7 @@ export namespace VirtualVariableItem {
 
 export class ExpressionItem extends ExpressionContainer {
 
+    severity?: Severity;
     static notAvailable = 'not available';
 
     protected _value = ExpressionItem.notAvailable;
@@ -299,14 +301,17 @@ export class ExpressionItem extends ExpressionContainer {
                     this.namedVariables = body.namedVariables;
                     this.indexedVariables = body.indexedVariables;
                     this.elements = undefined;
+                    this.severity = Severity.Log;
                 }
             } catch (err) {
                 this._value = err.message;
                 this._available = false;
+                this.severity = Severity.Error;
             }
         } else {
             this._value = 'Please start a debug session to evaluate';
             this._available = false;
+            this.severity = Severity.Error;
         }
     }
 

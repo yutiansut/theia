@@ -17,32 +17,35 @@
 import { injectable } from 'inversify';
 import { MarkerManager } from '../marker-manager';
 import { PROBLEM_KIND } from '../../common/problem-marker';
-import { Marker } from '../../common/marker';
-import URI from '@theia/core/lib/common/uri';
 import { Diagnostic } from 'vscode-languageserver-types';
 
 export interface ProblemStat {
     errors: number;
     warnings: number;
+    infos: number;
 }
 
 @injectable()
 export class ProblemManager extends MarkerManager<Diagnostic> {
 
-    public getKind() {
+    public getKind(): string {
         return PROBLEM_KIND;
     }
 
     getProblemStat(): ProblemStat {
-        const allMarkers: Marker<Diagnostic>[] = [];
-        for (const uri of this.getUris()) {
-            allMarkers.push(...this.findMarkers({ uri: new URI(uri) }));
+        let errors = 0;
+        let warnings = 0;
+        let infos = 0;
+        for (const marker of this.findMarkers()) {
+            if (marker.data.severity === 1) {
+                errors++;
+            } else if (marker.data.severity === 2) {
+                warnings++;
+            } else if (marker.data.severity === 3) {
+                infos++;
+            }
         }
-
-        const errors = allMarkers.filter(m => m.data.severity === 1).length;
-        const warnings = allMarkers.filter(m => m.data.severity === 2).length;
-
-        return { errors, warnings };
+        return { errors, warnings, infos };
     }
 
 }

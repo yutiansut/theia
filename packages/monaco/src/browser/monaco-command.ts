@@ -17,7 +17,7 @@
 import { injectable, inject } from 'inversify';
 import { ProtocolToMonacoConverter } from 'monaco-languageclient/lib';
 import { Position, Location } from '@theia/languages/lib/browser';
-import { Command, CommandContribution } from '@theia/core';
+import { Command, CommandContribution, CommandRegistry } from '@theia/core';
 import { CommonCommands } from '@theia/core/lib/browser';
 import { QuickOpenService } from '@theia/core/lib/browser/quick-open/quick-open-service';
 import { QuickOpenItem, QuickOpenMode } from '@theia/core/lib/browser/quick-open/quick-open-model';
@@ -25,7 +25,7 @@ import { EditorCommands } from '@theia/editor/lib/browser';
 import { MonacoEditor } from './monaco-editor';
 import { MonacoCommandRegistry, MonacoEditorCommandHandler } from './monaco-command-registry';
 import MenuRegistry = monaco.actions.MenuRegistry;
-import MenuId = monaco.actions.MenuId;
+import { MonacoCommandService } from './monaco-command-service';
 
 export type MonacoCommand = Command & { delegate?: string };
 export namespace MonacoCommands {
@@ -57,22 +57,19 @@ export namespace MonacoCommands {
     export const SELECTION_ADD_PREVIOUS_OCCURRENCE = 'editor.action.addSelectionToPreviousFindMatch';
     export const SELECTION_SELECT_ALL_OCCURRENCES = 'editor.action.selectHighlights';
 
-    export const ACTIONS: MonacoCommand[] = [
-        { id: SELECTION_SELECT_ALL, label: 'Select All', delegate: 'editor.action.selectAll' }
-    ];
+    export const GO_TO_DEFINITION = 'editor.action.revealDefinition';
+
+    export const ACTIONS = new Map<string, MonacoCommand>();
+    ACTIONS.set(SELECTION_SELECT_ALL, { id: SELECTION_SELECT_ALL, label: 'Select All', delegate: 'editor.action.selectAll' });
     export const EXCLUDE_ACTIONS = new Set([
         ...Object.keys(COMMON_ACTIONS),
         'editor.action.quickCommand',
         'editor.action.clipboardCutAction',
         'editor.action.clipboardCopyAction',
-        'editor.action.clipboardPasteAction',
-        'editor.action.goToImplementation',
-        'editor.action.toggleTabFocusMode',
-        'find.history.showNext',
-        'find.history.showPrevious',
+        'editor.action.clipboardPasteAction'
     ]);
     const iconClasses = new Map<string, string>();
-    for (const menuItem of MenuRegistry.getMenuItems(MenuId.EditorContext)) {
+    for (const menuItem of MenuRegistry.getMenuItems(7)) {
         if (menuItem.command.iconClass) {
             iconClasses.set(menuItem.command.id, menuItem.command.iconClass);
         }
@@ -82,7 +79,13 @@ export namespace MonacoCommands {
         if (!EXCLUDE_ACTIONS.has(id)) {
             const label = command.label;
             const iconClass = iconClasses.get(id);
-            ACTIONS.push({ id, label, iconClass });
+            ACTIONS.set(id, { id, label, iconClass });
+        }
+    }
+    for (const keybinding of monaco.keybindings.KeybindingsRegistry.getDefaultKeybindings()) {
+        const id = keybinding.command;
+        if (!ACTIONS.has(id) && !EXCLUDE_ACTIONS.has(id)) {
+            ACTIONS.set(id, { id, delegate: id });
         }
     }
 }
@@ -91,7 +94,10 @@ export namespace MonacoCommands {
 export class MonacoEditorCommandHandlers implements CommandContribution {
 
     @inject(MonacoCommandRegistry)
-    protected readonly registry: MonacoCommandRegistry;
+    protected readonly monacoCommandRegistry: MonacoCommandRegistry;
+
+    @inject(CommandRegistry)
+    protected readonly commandRegistry: CommandRegistry;
 
     @inject(ProtocolToMonacoConverter)
     protected readonly p2m: ProtocolToMonacoConverter;
@@ -103,6 +109,28 @@ export class MonacoEditorCommandHandlers implements CommandContribution {
         this.registerCommonCommandHandlers();
         this.registerEditorCommandHandlers();
         this.registerMonacoActionCommands();
+        this.registerInternalLanguageServiceCommands();
+    }
+
+    protected registerInternalLanguageServiceCommands(): void {
+        const instantiationService = monaco.services.StaticServices.instantiationService.get();
+        const monacoCommands = monaco.commands.CommandsRegistry.getCommands();
+        for (const command of monacoCommands.keys()) {
+            if (command.startsWith('_execute')) {
+                this.commandRegistry.registerCommand(
+                    {
+                        id: command
+                    },
+                    {
+                        // tslint:disable-next-line:no-any
+                        execute: (...args: any) => instantiationService.invokeFunction(
+                            monacoCommands.get(command)!.handler,
+                            ...args
+                        )
+                    }
+                );
+            }
+        }
     }
 
     protected registerCommonCommandHandlers(): void {
@@ -110,7 +138,7 @@ export class MonacoEditorCommandHandlers implements CommandContribution {
         for (const action in MonacoCommands.COMMON_ACTIONS) {
             const command = MonacoCommands.COMMON_ACTIONS[action];
             const handler = this.newCommonActionHandler(action);
-            this.registry.registerHandler(command, handler);
+            this.monacoCommandRegistry.registerHandler(command, handler);
         }
     }
     protected newCommonActionHandler(action: string): MonacoEditorCommandHandler {
@@ -121,11 +149,11 @@ export class MonacoEditorCommandHandlers implements CommandContribution {
     }
 
     protected registerEditorCommandHandlers(): void {
-        this.registry.registerHandler(EditorCommands.SHOW_REFERENCES.id, this.newShowReferenceHandler());
-        this.registry.registerHandler(EditorCommands.CONFIG_INDENTATION.id, this.newConfigIndentationHandler());
-        this.registry.registerHandler(EditorCommands.CONFIG_EOL.id, this.newConfigEolHandler());
-        this.registry.registerHandler(EditorCommands.INDENT_USING_SPACES.id, this.newConfigTabSizeHandler(true));
-        this.registry.registerHandler(EditorCommands.INDENT_USING_TABS.id, this.newConfigTabSizeHandler(false));
+        this.monacoCommandRegistry.registerHandler(EditorCommands.SHOW_REFERENCES.id, this.newShowReferenceHandler());
+        this.monacoCommandRegistry.registerHandler(EditorCommands.CONFIG_INDENTATION.id, this.newConfigIndentationHandler());
+        this.monacoCommandRegistry.registerHandler(EditorCommands.CONFIG_EOL.id, this.newConfigEolHandler());
+        this.monacoCommandRegistry.registerHandler(EditorCommands.INDENT_USING_SPACES.id, this.newConfigTabSizeHandler(true));
+        this.monacoCommandRegistry.registerHandler(EditorCommands.INDENT_USING_TABS.id, this.newConfigTabSizeHandler(false));
     }
 
     protected newShowReferenceHandler(): MonacoEditorCommandHandler {
@@ -239,19 +267,19 @@ export class MonacoEditorCommandHandlers implements CommandContribution {
     }
 
     protected registerMonacoActionCommands(): void {
-        for (const action of MonacoCommands.ACTIONS) {
+        for (const action of MonacoCommands.ACTIONS.values()) {
             const handler = this.newMonacoActionHandler(action);
-            this.registry.registerCommand(action, handler);
+            this.monacoCommandRegistry.registerCommand(action, handler);
         }
     }
     protected newMonacoActionHandler(action: MonacoCommand): MonacoEditorCommandHandler {
         const delegate = action.delegate;
-        return delegate ? this.newCommandHandler(delegate) : this.newActionHandler(action.id);
+        return delegate ? this.newDelegateHandler(delegate) : this.newActionHandler(action.id);
     }
 
     protected newKeyboardHandler(action: string): MonacoEditorCommandHandler {
         return {
-            execute: (editor, ...args) => editor.getControl().cursor.trigger('keyboard', action, args)
+            execute: (editor, ...args) => editor.getControl()._modelData.cursor.trigger('keyboard', action, args)
         };
     }
     protected newCommandHandler(action: string): MonacoEditorCommandHandler {
@@ -263,6 +291,11 @@ export class MonacoEditorCommandHandlers implements CommandContribution {
         return {
             execute: editor => editor.runAction(action),
             isEnabled: editor => editor.isActionSupported(action)
+        };
+    }
+    protected newDelegateHandler(action: string): MonacoEditorCommandHandler {
+        return {
+            execute: (editor, ...args) => (editor.commandService as MonacoCommandService).executeMonacoCommand(action, ...args)
         };
     }
 

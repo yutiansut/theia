@@ -13,6 +13,8 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
+
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { MonacoEditor } from '@theia/monaco/lib/browser/monaco-editor';
 import {
     TextEditorConfiguration,
@@ -24,32 +26,38 @@ import {
     ApplyEditsOptions,
     UndoStopOptions,
     DecorationOptions
-} from '../../api/plugin-api';
-import { Range } from '../../api/model';
-import { DisposableCollection, Emitter, Event } from '@theia/core';
+} from '../../common/plugin-api-rpc';
+import { Range } from '../../common/plugin-api-rpc-model';
+import { Emitter, Event } from '@theia/core';
 import { TextEditorCursorStyle, cursorStyleToString } from '../../common/editor-options';
 import { TextEditorLineNumbersStyle, EndOfLine } from '../../plugin/types-impl';
 
-export class TextEditorMain {
+export class TextEditorMain implements Disposable {
 
     private properties: TextEditorPropertiesMain | undefined;
-    private modelListeners: DisposableCollection = new DisposableCollection();
     private editor: MonacoEditor | undefined;
-    private editorListeners = new DisposableCollection();
 
     private readonly onPropertiesChangedEmitter = new Emitter<EditorChangedPropertiesData>();
+
+    private readonly toDispose = new DisposableCollection(
+        Disposable.create(() => this.properties = undefined),
+        this.onPropertiesChangedEmitter
+    );
 
     constructor(
         private id: string,
         private model: monaco.editor.IModel,
         editor: MonacoEditor
     ) {
-        this.properties = undefined;
-        this.modelListeners.push(this.model.onDidChangeOptions(e => {
-            this.updateProperties(undefined);
-        }));
+        this.toDispose.push(this.model.onDidChangeOptions(() =>
+            this.updateProperties(undefined)
+        ));
         this.setEditor(editor);
         this.updateProperties(undefined);
+    }
+
+    dispose(): void {
+        this.toDispose.dispose();
     }
 
     private updateProperties(source?: string): void {
@@ -64,47 +72,41 @@ export class TextEditorMain {
         }
     }
 
+    protected readonly toDisposeOnEditor = new DisposableCollection();
+
     private setEditor(editor?: MonacoEditor): void {
         if (this.editor === editor) {
             return;
         }
-
-        this.editorListeners.dispose();
-        this.editorListeners = new DisposableCollection();
+        this.toDisposeOnEditor.dispose();
+        this.toDispose.push(this.toDisposeOnEditor);
         this.editor = editor;
+        this.toDisposeOnEditor.push(Disposable.create(() => this.editor = undefined));
 
         if (this.editor) {
             const monaco = this.editor.getControl();
-            this.editorListeners.push(this.editor.onSelectionChanged(_ => {
+            this.toDisposeOnEditor.push(this.editor.onSelectionChanged(_ => {
                 this.updateProperties();
             }));
-            this.editorListeners.push(monaco.onDidChangeModel(() => {
+            this.toDisposeOnEditor.push(monaco.onDidChangeModel(() => {
                 this.setEditor(undefined);
             }));
-            this.editorListeners.push(monaco.onDidChangeCursorSelection(e => {
+            this.toDisposeOnEditor.push(monaco.onDidChangeCursorSelection(e => {
                 this.updateProperties(e.source);
             }));
-            this.editorListeners.push(monaco.onDidChangeConfiguration(() => {
+            this.toDisposeOnEditor.push(monaco.onDidChangeConfiguration(() => {
                 this.updateProperties();
             }));
-            this.editorListeners.push(monaco.onDidLayoutChange(() => {
+            this.toDisposeOnEditor.push(monaco.onDidLayoutChange(() => {
                 this.updateProperties();
             }));
-            this.editorListeners.push(monaco.onDidScrollChange(() => {
+            this.toDisposeOnEditor.push(monaco.onDidScrollChange(() => {
                 this.updateProperties();
             }));
 
             this.updateProperties();
 
         }
-    }
-
-    dispose(): void {
-        this.modelListeners.dispose();
-        delete this.model;
-
-        this.editorListeners.dispose();
-        delete this.editor;
     }
 
     getId(): string {
@@ -270,7 +272,7 @@ export class TextEditorMain {
         if (!this.editor) {
             return;
         }
-        this.editor.getControl().setDecorations(key, ranges);
+        this.editor.getControl().setDecorations(key, ranges.map(option => Object.assign(option, { color: undefined })));
     }
 
     setDecorationsFast(key: string, _ranges: number[]): void {
@@ -349,7 +351,7 @@ export class TextEditorPropertiesMain {
     private static getSelectionsFromEditor(prevProperties: TextEditorPropertiesMain | undefined, editor: MonacoEditor): monaco.Selection[] {
         let result: monaco.Selection[] | undefined = undefined;
         if (editor) {
-            result = editor.getControl().getSelections();
+            result = editor.getControl().getSelections() || undefined;
         }
 
         if (!result && prevProperties) {

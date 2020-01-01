@@ -18,25 +18,46 @@ import { injectable } from 'inversify';
 import { PreferenceService, PreferenceChange } from '../';
 import { Emitter, Event } from '../../../common';
 import { OverridePreferenceName } from '../preference-contribution';
+import URI from '../../../common/uri';
+import { PreferenceChanges } from '../preference-service';
 
 @injectable()
 export class MockPreferenceService implements PreferenceService {
     constructor() { }
-    dispose() { }
+    dispose(): void { }
     get<T>(preferenceName: string): T | undefined;
     get<T>(preferenceName: string, defaultValue: T): T;
     get<T>(preferenceName: string, defaultValue: T, resourceUri: string): T;
     get<T>(preferenceName: string, defaultValue?: T, resourceUri?: string): T | undefined {
         return undefined;
     }
+    resolve<T>(preferenceName: string, defaultValue?: T, resourceUri?: string): {
+        configUri?: URI,
+        value?: T
+    } {
+        return {};
+    }
+    inspect<T>(preferenceName: string, resourceUri?: string): {
+        preferenceName: string,
+        defaultValue: T | undefined,
+        globalValue: T | undefined, // User Preference
+        workspaceValue: T | undefined, // Workspace Preference
+        workspaceFolderValue: T | undefined // Folder Preference
+    } | undefined {
+        return undefined;
+    }
     // tslint:disable-next-line:no-any
     set(preferenceName: string, value: any): Promise<void> { return Promise.resolve(); }
     ready: Promise<void> = Promise.resolve();
     readonly onPreferenceChanged: Event<PreferenceChange> = new Emitter<PreferenceChange>().event;
+    readonly onPreferencesChanged: Event<PreferenceChanges> = new Emitter<PreferenceChanges>().event;
     overridePreferenceName(options: OverridePreferenceName): string {
         return options.preferenceName;
     }
-    overridenPreferenceName(preferenceName: string): OverridePreferenceName | undefined {
+    overriddenPreferenceName(preferenceName: string): OverridePreferenceName | undefined {
         return undefined;
     }
+
+    // tslint:disable-next-line:no-any
+    validate(name: string, value: any): boolean { return true; }
 }

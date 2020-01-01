@@ -62,7 +62,7 @@ export class DebugEditorService {
         if (!(editor instanceof MonacoEditor)) {
             return;
         }
-        const uri = editor.getControl().getModel().uri.toString();
+        const uri = editor.getControl().getModel()!.uri.toString();
         const debugModel = this.factory(editor);
         this.models.set(uri, debugModel);
         editor.getControl().onDidDispose(() => {
@@ -84,79 +84,82 @@ export class DebugEditorService {
         return uri && this.models.get(uri.toString());
     }
 
-    get logpoint(): DebugBreakpoint | undefined {
-        const logpoint = this.anyBreakpoint;
+    getLogpoint(position: monaco.Position): DebugBreakpoint | undefined {
+        const logpoint = this.anyBreakpoint(position);
         return logpoint && logpoint.logMessage ? logpoint : undefined;
     }
-    get logpointEnabled(): boolean | undefined {
-        const { logpoint } = this;
+    getLogpointEnabled(position: monaco.Position): boolean | undefined {
+        const logpoint = this.getLogpoint(position);
         return logpoint && logpoint.enabled;
     }
 
-    get breakpoint(): DebugBreakpoint | undefined {
-        const breakpoint = this.anyBreakpoint;
+    getBreakpoint(position: monaco.Position): DebugBreakpoint | undefined {
+        const breakpoint = this.anyBreakpoint(position);
         return breakpoint && breakpoint.logMessage ? undefined : breakpoint;
     }
-    get breakpointEnabled(): boolean | undefined {
-        const { breakpoint } = this;
+    getBreakpointEnabled(position: monaco.Position): boolean | undefined {
+        const breakpoint = this.getBreakpoint(position);
         return breakpoint && breakpoint.enabled;
     }
 
-    get anyBreakpoint(): DebugBreakpoint | undefined {
-        return this.model && this.model.breakpoint;
+    anyBreakpoint(position?: monaco.Position): DebugBreakpoint | undefined {
+        return this.model && this.model.getBreakpoint(position);
     }
 
-    toggleBreakpoint(): void {
+    toggleBreakpoint(position?: monaco.Position): void {
         const { model } = this;
         if (model) {
-            model.toggleBreakpoint();
+            model.toggleBreakpoint(position);
         }
     }
-    setBreakpointEnabled(enabled: boolean): void {
-        const { anyBreakpoint } = this;
-        if (anyBreakpoint) {
-            anyBreakpoint.setEnabled(enabled);
+    setBreakpointEnabled(position: monaco.Position, enabled: boolean): void {
+        const breakpoint = this.anyBreakpoint(position);
+        if (breakpoint) {
+            breakpoint.setEnabled(enabled);
         }
     }
 
     showHover(): void {
         const { model } = this;
         if (model) {
-            const selection = model.editor.getControl().getSelection();
+            const selection = model.editor.getControl().getSelection()!;
             model.hover.show({ selection, focus: true });
         }
     }
     canShowHover(): boolean {
         const { model } = this;
         if (model) {
-            const selection = model.editor.getControl().getSelection();
-            return !!model.editor.getControl().getModel().getWordAtPosition(selection.getStartPosition());
+            const selection = model.editor.getControl().getSelection()!;
+            return !!model.editor.getControl().getModel()!.getWordAtPosition(selection.getStartPosition());
         }
         return false;
     }
 
-    addBreakpoint(context: DebugBreakpointWidget.Context): void {
+    addBreakpoint(context: DebugBreakpointWidget.Context, position?: monaco.Position): void {
         const { model } = this;
         if (model) {
-            const { breakpoint } = model;
+            position = position || model.position;
+            const breakpoint = model.getBreakpoint(position);
             if (breakpoint) {
                 model.breakpointWidget.show({ breakpoint, context });
             } else {
                 model.breakpointWidget.show({
-                    position: model.position,
+                    position,
                     context
                 });
             }
         }
     }
-    editBreakpoint(): Promise<void>;
-    editBreakpoint(breakpoint: DebugBreakpoint): Promise<void>;
-    async editBreakpoint(breakpoint: DebugBreakpoint | undefined = this.anyBreakpoint): Promise<void> {
-        if (breakpoint) {
-            await breakpoint.open();
-            const model = this.models.get(breakpoint.uri.toString());
+    async editBreakpoint(breakpointOrPosition?: DebugBreakpoint | monaco.Position): Promise<void> {
+        if (breakpointOrPosition instanceof monaco.Position) {
+            breakpointOrPosition = this.anyBreakpoint(breakpointOrPosition);
+        }
+
+        if (breakpointOrPosition) {
+            await breakpointOrPosition.open();
+            const model = this.models.get(breakpointOrPosition.uri.toString());
             if (model) {
-                model.breakpointWidget.show(breakpoint);
+                model.breakpointWidget.show(breakpointOrPosition);
             }
         }
     }
@@ -172,7 +175,7 @@ export class DebugEditorService {
             model.acceptBreakpoint();
         }
     }
-    protected closeBreakpointIfAffected({ uri, removed }: BreakpointsChangeEvent) {
+    protected closeBreakpointIfAffected({ uri, removed }: BreakpointsChangeEvent): void {
         const model = this.models.get(uri.toString());
         if (!model) {
             return;

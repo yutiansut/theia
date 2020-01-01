@@ -27,6 +27,7 @@ import {
     LanguageContribution,
     PluginPackageLanguageContributionConfiguration,
     LanguageConfiguration,
+    PluginTaskDefinitionContribution,
     AutoClosingPairConditional,
     AutoClosingPair,
     ViewContainer,
@@ -43,22 +44,25 @@ import {
     PluginPackageCommand,
     PluginCommand,
     IconUrl,
-    getPluginId
+    ThemeContribution,
+    IconThemeContribution
 } from '../../../common/plugin-protocol';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isObject } from 'util';
 import { GrammarsReader } from './grammars-reader';
-import { CharacterPair } from '../../../api/plugin-api';
+import { CharacterPair } from '../../../common/plugin-api-rpc';
 import * as jsoncparser from 'jsonc-parser';
 import { IJSONSchema } from '@theia/core/lib/common/json-schema';
 import { deepClone } from '@theia/core/lib/common/objects';
 import { FileUri } from '@theia/core/lib/node/file-uri';
 import { PreferenceSchema, PreferenceSchemaProperties } from '@theia/core/lib/common/preferences/preference-schema';
 import { RecursivePartial } from '@theia/core/lib/common/types';
+import { ProblemMatcherContribution, ProblemPatternContribution, TaskDefinition } from '@theia/task/lib/common/task-protocol';
+import { ColorDefinition } from '@theia/core/lib/browser/color-registry';
 
 namespace nls {
-    export function localize(key: string, _default: string) {
+    export function localize(key: string, _default: string): string {
         return _default;
     }
 }
@@ -69,8 +73,11 @@ const INTERNAL_CONSOLE_OPTIONS_SCHEMA = {
     description: nls.localize('internalConsoleOptions', 'Controls when the internal debug console should open.')
 };
 
+const colorIdPattern = '^\\w+[.\\w+]*$';
+
 @injectable()
 export class TheiaPluginScanner implements PluginScanner {
+
     private readonly _apiType: PluginEngine = 'theiaPlugin';
 
     @inject(GrammarsReader)
@@ -82,7 +89,9 @@ export class TheiaPluginScanner implements PluginScanner {
 
     getModel(plugin: PluginPackage): PluginModel {
         const result: PluginModel = {
-            id: `${plugin.publisher}.${plugin.name}`,
+            packagePath: plugin.packagePath,
+            // see id definition: https://github.com/microsoft/vscode/blob/15916055fe0cb9411a5f36119b3b012458fe0a1d/src/vs/platform/extensions/common/extensions.ts#L167-L169
+            id: `${plugin.publisher.toLowerCase()}.${plugin.name.toLowerCase()}`,
             name: plugin.name,
             publisher: plugin.publisher,
             version: plugin.version,
@@ -97,7 +106,6 @@ export class TheiaPluginScanner implements PluginScanner {
                 backend: plugin.theiaPlugin!.backend
             }
         };
-        result.contributes = this.readContributions(plugin);
         return result;
     }
 
@@ -111,80 +119,181 @@ export class TheiaPluginScanner implements PluginScanner {
         };
     }
 
-    protected readContributions(rawPlugin: PluginPackage): PluginContribution | undefined {
-        if (!rawPlugin.contributes) {
+    getDependencies(rawPlugin: PluginPackage): Map<string, string> | undefined {
+        // skip it since there is no way to load transitive dependencies for Theia plugins yet
+        return undefined;
+    }
+
+    getContribution(rawPlugin: PluginPackage): PluginContribution | undefined {
+        if (!rawPlugin.contributes && !rawPlugin.activationEvents) {
             return undefined;
         }
 
-        const contributions: PluginContribution = {};
-        if (rawPlugin.contributes.configuration) {
-            const config = this.readConfiguration(rawPlugin.contributes.configuration, rawPlugin.packagePath);
-            contributions.configuration = config;
+        const contributions: PluginContribution = {
+            activationEvents: rawPlugin.activationEvents
+        };
+
+        if (!rawPlugin.contributes) {
+            return contributions;
         }
+
+        try {
+            if (rawPlugin.contributes.configuration) {
+                const configurations = Array.isArray(rawPlugin.contributes.configuration) ? rawPlugin.contributes.configuration : [rawPlugin.contributes.configuration];
+                contributions.configuration = [];
+                for (const c of configurations) {
+                    const config = this.readConfiguration(c, rawPlugin.packagePath);
+                    if (config) {
+                        contributions.configuration.push(config);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'configuration'.`, rawPlugin.contributes.configuration, err);
+        }
+
         const configurationDefaults = rawPlugin.contributes.configurationDefaults;
         contributions.configurationDefaults = PreferenceSchemaProperties.is(configurationDefaults) ? configurationDefaults : undefined;
 
-        if (rawPlugin.contributes!.languages) {
-            const languages = this.readLanguages(rawPlugin.contributes.languages!, rawPlugin.packagePath);
-            contributions.languages = languages;
+        try {
+            if (rawPlugin.contributes!.languages) {
+                const languages = this.readLanguages(rawPlugin.contributes.languages!, rawPlugin.packagePath);
+                contributions.languages = languages;
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'languages'.`, rawPlugin.contributes!.languages, err);
         }
 
-        if (rawPlugin.contributes!.grammars) {
-            const grammars = this.grammarsReader.readGrammars(rawPlugin.contributes.grammars!, rawPlugin.packagePath);
-            contributions.grammars = grammars;
+        try {
+            if (rawPlugin.contributes!.grammars) {
+                const grammars = this.grammarsReader.readGrammars(rawPlugin.contributes.grammars!, rawPlugin.packagePath);
+                contributions.grammars = grammars;
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'grammars'.`, rawPlugin.contributes!.grammars, err);
         }
 
-        if (rawPlugin.contributes!.viewsContainers) {
-            contributions.viewsContainers = {};
+        try {
+            if (rawPlugin.contributes && rawPlugin.contributes.viewsContainers) {
+                const viewsContainers = rawPlugin.contributes.viewsContainers;
+                contributions.viewsContainers = {};
 
-            Object.keys(rawPlugin.contributes.viewsContainers!).forEach(location => {
-                const containers = this.readViewsContainers(rawPlugin.contributes!.viewsContainers![location], rawPlugin);
-                if (location === 'activitybar') {
-                    location = 'left';
+                for (const location of Object.keys(viewsContainers)) {
+                    const containers = this.readViewsContainers(viewsContainers[location], rawPlugin);
+                    const loc = location === 'activitybar' ? 'left' : location;
+                    if (contributions.viewsContainers[loc]) {
+                        contributions.viewsContainers[loc] = contributions.viewsContainers[loc].concat(containers);
+                    } else {
+                        contributions.viewsContainers[loc] = containers;
+                    }
                 }
-
-                if (contributions.viewsContainers![location]) {
-                    contributions.viewsContainers![location] = contributions.viewsContainers![location].concat(containers);
-                } else {
-                    contributions.viewsContainers![location] = containers;
-                }
-            });
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'viewsContainers'.`, rawPlugin.contributes!.viewsContainers, err);
         }
 
-        if (rawPlugin.contributes!.views) {
-            contributions.views = {};
+        try {
+            if (rawPlugin.contributes!.views) {
+                contributions.views = {};
 
-            Object.keys(rawPlugin.contributes.views!).forEach(location => {
-                const views = this.readViews(rawPlugin.contributes!.views![location]);
-                contributions.views![location] = views;
-            });
+                Object.keys(rawPlugin.contributes.views!).forEach(location => {
+                    const views = this.readViews(rawPlugin.contributes!.views![location]);
+                    contributions.views![location] = views;
+                });
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'views'.`, rawPlugin.contributes!.views, err);
         }
 
-        const pluginCommands = rawPlugin.contributes.commands;
-        if (pluginCommands) {
-            const commands = Array.isArray(pluginCommands) ? pluginCommands : [pluginCommands];
-            contributions.commands = commands.map(command => this.readCommand(command, rawPlugin));
+        try {
+            const pluginCommands = rawPlugin.contributes.commands;
+            if (pluginCommands) {
+                const commands = Array.isArray(pluginCommands) ? pluginCommands : [pluginCommands];
+                contributions.commands = commands.map(command => this.readCommand(command, rawPlugin));
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'commands'.`, rawPlugin.contributes!.commands, err);
         }
 
-        if (rawPlugin.contributes!.menus) {
-            contributions.menus = {};
+        try {
+            if (rawPlugin.contributes!.menus) {
+                contributions.menus = {};
 
-            Object.keys(rawPlugin.contributes.menus!).forEach(location => {
-                const menus = this.readMenus(rawPlugin.contributes!.menus![location]);
-                contributions.menus![location] = menus;
-            });
+                Object.keys(rawPlugin.contributes.menus!).forEach(location => {
+                    const menus = this.readMenus(rawPlugin.contributes!.menus![location]);
+                    contributions.menus![location] = menus;
+                });
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'menus'.`, rawPlugin.contributes!.menus, err);
         }
 
-        if (rawPlugin.contributes && rawPlugin.contributes.keybindings) {
-            contributions.keybindings = rawPlugin.contributes.keybindings.map(rawKeybinding => this.readKeybinding(rawKeybinding));
+        try {
+            if (rawPlugin.contributes! && rawPlugin.contributes.keybindings) {
+                const rawKeybindings = Array.isArray(rawPlugin.contributes.keybindings) ? rawPlugin.contributes.keybindings : [rawPlugin.contributes.keybindings];
+                contributions.keybindings = rawKeybindings.map(rawKeybinding => this.readKeybinding(rawKeybinding));
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'keybindings'.`, rawPlugin.contributes!.keybindings, err);
         }
 
-        if (rawPlugin.contributes!.debuggers) {
-            const debuggers = this.readDebuggers(rawPlugin.contributes.debuggers!);
-            contributions.debuggers = debuggers;
+        try {
+            if (rawPlugin.contributes!.debuggers) {
+                const debuggers = this.readDebuggers(rawPlugin.contributes.debuggers!);
+                contributions.debuggers = debuggers;
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'debuggers'.`, rawPlugin.contributes!.debuggers, err);
         }
 
-        contributions.snippets = this.readSnippets(rawPlugin);
+        try {
+            if (rawPlugin.contributes!.taskDefinitions) {
+                const definitions = rawPlugin.contributes!.taskDefinitions!;
+                contributions.taskDefinitions = definitions.map(definitionContribution => this.readTaskDefinition(rawPlugin.name, definitionContribution));
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'taskDefinitions'.`, rawPlugin.contributes!.taskDefinitions, err);
+        }
+
+        try {
+            if (rawPlugin.contributes!.problemMatchers) {
+                contributions.problemMatchers = rawPlugin.contributes!.problemMatchers as ProblemMatcherContribution[];
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'problemMatchers'.`, rawPlugin.contributes!.problemMatchers, err);
+        }
+
+        try {
+            if (rawPlugin.contributes!.problemPatterns) {
+                contributions.problemPatterns = rawPlugin.contributes!.problemPatterns as ProblemPatternContribution[];
+            }
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'problemPatterns'.`, rawPlugin.contributes!.problemPatterns, err);
+        }
+
+        try {
+            contributions.snippets = this.readSnippets(rawPlugin);
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'snippets'.`, rawPlugin.contributes!.snippets, err);
+        }
+
+        try {
+            contributions.themes = this.readThemes(rawPlugin);
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'themes'.`, rawPlugin.contributes.themes, err);
+        }
+
+        try {
+            contributions.iconThemes = this.readIconThemes(rawPlugin);
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'iconThemes'.`, rawPlugin.contributes.iconThemes, err);
+        }
+
+        try {
+            contributions.colors = this.readColors(rawPlugin);
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'colors'.`, rawPlugin.contributes.colors, err);
+        }
         return contributions;
     }
 
@@ -204,7 +313,87 @@ export class TheiaPluginScanner implements PluginScanner {
     }
 
     protected toPluginUrl(pck: PluginPackage, relativePath: string): string {
-        return path.join('hostedPlugin', getPluginId(pck), relativePath);
+        return PluginPackage.toPluginUrl(pck, relativePath);
+    }
+
+    protected readColors(pck: PluginPackage): ColorDefinition[] | undefined {
+        if (!pck.contributes || !pck.contributes.colors) {
+            return undefined;
+        }
+        const result: ColorDefinition[] = [];
+        for (const contribution of pck.contributes.colors) {
+            if (typeof contribution.id !== 'string' || contribution.id.length === 0) {
+                console.error("'configuration.colors.id' must be defined and can not be empty");
+                continue;
+            }
+            if (!contribution.id.match(colorIdPattern)) {
+                console.error("'configuration.colors.id' must follow the word[.word]*");
+                continue;
+            }
+            if (typeof contribution.description !== 'string' || contribution.id.length === 0) {
+                console.error("'configuration.colors.description' must be defined and can not be empty");
+                continue;
+            }
+            const defaults = contribution.defaults;
+            if (!defaults || typeof defaults !== 'object' || typeof defaults.light !== 'string' || typeof defaults.dark !== 'string' || typeof defaults.highContrast !== 'string') {
+                console.error("'configuration.colors.defaults' must be defined and must contain 'light', 'dark' and 'highContrast'");
+                continue;
+            }
+            result.push({
+                id: contribution.id,
+                description: contribution.description,
+                defaults: {
+                    light: defaults.light,
+                    dark: defaults.dark,
+                    hc: defaults.highContrast
+                }
+            });
+        }
+        return result;
+    }
+
+    protected readThemes(pck: PluginPackage): ThemeContribution[] | undefined {
+        if (!pck.contributes || !pck.contributes.themes) {
+            return undefined;
+        }
+        const result: ThemeContribution[] = [];
+        for (const contribution of pck.contributes.themes) {
+            if (contribution.path) {
+                result.push({
+                    id: contribution.id,
+                    uri: FileUri.create(path.join(pck.packagePath, contribution.path)).toString(),
+                    description: contribution.description,
+                    label: contribution.label,
+                    uiTheme: contribution.uiTheme
+                });
+            }
+        }
+        return result;
+    }
+
+    protected readIconThemes(pck: PluginPackage): IconThemeContribution[] | undefined {
+        if (!pck.contributes || !pck.contributes.iconThemes) {
+            return undefined;
+        }
+        const result: IconThemeContribution[] = [];
+        for (const contribution of pck.contributes.iconThemes) {
+            if (typeof contribution.id !== 'string') {
+                console.error('Expected string in `contributes.iconThemes.id`. Provided value:', contribution.id);
+                continue;
+            }
+            if (typeof contribution.path !== 'string') {
+                console.error('Expected string in `contributes.iconThemes.path`. Provided value:', contribution.path);
+                continue;
+            }
+            result.push({
+                id: contribution.id,
+                uri: FileUri.create(path.join(pck.packagePath, contribution.path)).toString(),
+                description: contribution.description,
+                label: contribution.label,
+                uiTheme: contribution.uiTheme
+            });
+        }
+        return result;
     }
 
     protected readSnippets(pck: PluginPackage): SnippetContribution[] | undefined {
@@ -272,7 +461,8 @@ export class TheiaPluginScanner implements PluginScanner {
     private readView(rawView: PluginPackageView): View {
         const result: View = {
             id: rawView.id,
-            name: rawView.name
+            name: rawView.name,
+            when: rawView.when
         };
 
         return result;
@@ -285,6 +475,7 @@ export class TheiaPluginScanner implements PluginScanner {
     private readMenu(rawMenu: PluginPackageMenu): Menu {
         const result: Menu = {
             command: rawMenu.command,
+            alt: rawMenu.alt,
             group: rawMenu.group,
             when: rawMenu.when
         };
@@ -355,6 +546,19 @@ export class TheiaPluginScanner implements PluginScanner {
         return result;
     }
 
+    private readTaskDefinition(pluginName: string, definitionContribution: PluginTaskDefinitionContribution): TaskDefinition {
+        const propertyKeys = definitionContribution.properties ? Object.keys(definitionContribution.properties) : [];
+        return {
+            taskType: definitionContribution.type,
+            source: pluginName,
+            properties: {
+                required: definitionContribution.required,
+                all: propertyKeys,
+                schema: definitionContribution
+            }
+        };
+    }
+
     protected resolveSchemaAttributes(type: string, configurationAttributes: { [request: string]: IJSONSchema }): IJSONSchema[] {
         const taskSchema = {};
         return Object.keys(configurationAttributes).map(request => {
@@ -393,14 +597,14 @@ export class TheiaPluginScanner implements PluginScanner {
             };
             properties['preLaunchTask'] = {
                 anyOf: [taskSchema, {
-                    type: ['string', 'null'],
+                    type: ['string'],
                 }],
                 default: '',
                 description: nls.localize('debugPrelaunchTask', 'Task to run before debug session starts.')
             };
             properties['postDebugTask'] = {
                 anyOf: [taskSchema, {
-                    type: ['string', 'null'],
+                    type: ['string'],
                 }],
                 default: '',
                 description: nls.localize('debugPostDebugTask', 'Task to run after debug session ends.')

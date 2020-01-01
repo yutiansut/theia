@@ -16,13 +16,14 @@
 
 import * as theia from '@theia/plugin';
 import URI from 'vscode-uri/lib/umd';
-import { Selection } from '../../api/plugin-api';
-import { Range } from '../../api/model';
+import { Selection } from '../../common/plugin-api-rpc';
+import { Range, CodeActionContext, CodeAction } from '../../common/plugin-api-rpc-model';
 import * as Converter from '../type-converters';
-import { createToken } from '../token-provider';
 import { DocumentsExtImpl } from '../documents';
 import { Diagnostics } from './diagnostics';
 import { CodeActionKind } from '../types-impl';
+import { CommandRegistryImpl } from '../command-registry';
+import { DisposableCollection } from '@theia/core/lib/common/disposable';
 
 export class CodeActionAdapter {
 
@@ -30,10 +31,12 @@ export class CodeActionAdapter {
         private readonly provider: theia.CodeActionProvider,
         private readonly document: DocumentsExtImpl,
         private readonly diagnostics: Diagnostics,
-        private readonly pluginId: string
+        private readonly pluginId: string,
+        private readonly commands: CommandRegistryImpl
     ) { }
 
-    provideCodeAction(resource: URI, rangeOrSelection: Range | Selection, context: monaco.languages.CodeActionContext): Promise<monaco.languages.CodeAction[]> {
+    async provideCodeAction(resource: URI, rangeOrSelection: Range | Selection,
+        context: CodeActionContext, token: theia.CancellationToken): Promise<CodeAction[] | undefined> {
         const document = this.document.getDocumentData(resource);
         if (!document) {
             return Promise.reject(new Error(`There are no document for ${resource}`));
@@ -56,44 +59,45 @@ export class CodeActionAdapter {
             only: context.only ? new CodeActionKind(context.only) : undefined
         };
 
-        return Promise.resolve(this.provider.provideCodeActions(doc, ran, codeActionContext, createToken())).then(commandsOrActions => {
-            if (!Array.isArray(commandsOrActions) || commandsOrActions.length === 0) {
-                return undefined!;
+        const commandsOrActions = await this.provider.provideCodeActions(doc, ran, codeActionContext, token);
+
+        if (!Array.isArray(commandsOrActions) || commandsOrActions.length === 0) {
+            return undefined;
+        }
+        // TODO cache toDispose and dispose it
+        const toDispose = new DisposableCollection();
+        const result: CodeAction[] = [];
+        for (const candidate of commandsOrActions) {
+            if (!candidate) {
+                continue;
             }
-            const result: monaco.languages.CodeAction[] = [];
-            for (const candidate of commandsOrActions) {
-                if (!candidate) {
-                    continue;
-                }
-                if (CodeActionAdapter._isCommand(candidate)) {
-                    result.push({
-                        title: candidate.title || '',
-                        command: Converter.toInternalCommand(candidate)
-                    });
-                } else {
-                    if (codeActionContext.only) {
-                        if (!candidate.kind) {
-                            /* tslint:disable-next-line:max-line-length */
-                            console.warn(`${this.pluginId} - Code actions of kind '${codeActionContext.only.value}' requested but returned code action does not have a 'kind'. Code action will be dropped. Please set 'CodeAction.kind'.`);
-                        } else if (!codeActionContext.only.contains(candidate.kind)) {
-                            /* tslint:disable-next-line:max-line-length */
-                            console.warn(`${this.pluginId} - Code actions of kind '${codeActionContext.only.value}' requested but returned code action is of kind '${candidate.kind.value}'. Code action will be dropped. Please check 'CodeActionContext.only' to only return requested code action.`);
-                        }
+            if (CodeActionAdapter._isCommand(candidate)) {
+                result.push({
+                    title: candidate.title || '',
+                    command: this.commands.converter.toSafeCommand(candidate, toDispose)
+                });
+            } else {
+                if (codeActionContext.only) {
+                    if (!candidate.kind) {
+                        /* tslint:disable-next-line:max-line-length */
+                        console.warn(`${this.pluginId} - Code actions of kind '${codeActionContext.only.value}' requested but returned code action does not have a 'kind'. Code action will be dropped. Please set 'CodeAction.kind'.`);
+                    } else if (!codeActionContext.only.contains(candidate.kind)) {
+                        /* tslint:disable-next-line:max-line-length */
+                        console.warn(`${this.pluginId} - Code actions of kind '${codeActionContext.only.value}' requested but returned code action is of kind '${candidate.kind.value}'. Code action will be dropped. Please check 'CodeActionContext.only' to only return requested code action.`);
                     }
-
-                    result.push({
-                        title: candidate.title,
-                        command: candidate.command && Converter.toInternalCommand(candidate.command),
-                        diagnostics: candidate.diagnostics && candidate.diagnostics.map(Converter.convertDiagnosticToMarkerData) as monaco.editor.IMarker[],
-                        edit: candidate.edit && Converter.fromWorkspaceEdit(candidate.edit) as monaco.languages.WorkspaceEdit,
-                        kind: candidate.kind && candidate.kind.value
-                    });
                 }
+
+                result.push({
+                    title: candidate.title,
+                    command: this.commands.converter.toSafeCommand(candidate.command, toDispose),
+                    diagnostics: candidate.diagnostics && candidate.diagnostics.map(Converter.convertDiagnosticToMarkerData),
+                    edit: candidate.edit && Converter.fromWorkspaceEdit(candidate.edit),
+                    kind: candidate.kind && candidate.kind.value
+                });
             }
+        }
 
-            return result;
-        });
-
+        return result;
     }
 
     // tslint:disable-next-line:no-any

@@ -19,23 +19,11 @@ import { injectable, inject } from 'inversify';
 import { MonacoTextModelService } from '@theia/monaco/lib/browser/monaco-text-model-service';
 import { MonacoWorkspace } from '@theia/monaco/lib/browser/monaco-workspace';
 import { Schemes } from '../../common/uri-components';
-
-export const EditorModelService = Symbol('EditorModelService');
-export interface EditorModelService {
-    onModelAdded: Event<MonacoEditorModel>;
-    onModelRemoved: Event<MonacoEditorModel>;
-    onModelModeChanged: Event<{ model: MonacoEditorModel, oldModeId: string }>;
-
-    onModelWillSave: Event<WillSaveMonacoModelEvent>;
-    onModelDirtyChanged: Event<MonacoEditorModel>;
-    onModelSaved: Event<MonacoEditorModel>;
-
-    getModels(): MonacoEditorModel[];
-    saveAll(includeUntitled?: boolean): Promise<boolean>;
-}
+import URI from '@theia/core/lib/common/uri';
+import { Reference } from '@theia/core/lib/common/reference';
 
 @injectable()
-export class EditorModelServiceImpl implements EditorModelService {
+export class EditorModelService {
 
     private monacoModelService: MonacoTextModelService;
     private modelModeChangedEmitter = new Emitter<{ model: MonacoEditorModel, oldModeId: string }>();
@@ -44,11 +32,11 @@ export class EditorModelServiceImpl implements EditorModelService {
     private modelSavedEmitter = new Emitter<MonacoEditorModel>();
     private onModelWillSavedEmitter = new Emitter<WillSaveMonacoModelEvent>();
 
-    onModelDirtyChanged: Event<MonacoEditorModel> = this.modelDirtyEmitter.event;
-    onModelSaved: Event<MonacoEditorModel> = this.modelSavedEmitter.event;
-    onModelModeChanged = this.modelModeChangedEmitter.event;
-    onModelRemoved = this.onModelRemovedEmitter.event;
-    onModelWillSave = this.onModelWillSavedEmitter.event;
+    readonly onModelDirtyChanged = this.modelDirtyEmitter.event;
+    readonly onModelSaved = this.modelSavedEmitter.event;
+    readonly onModelModeChanged = this.modelModeChangedEmitter.event;
+    readonly onModelRemoved = this.onModelRemovedEmitter.event;
+    readonly onModelWillSave = this.onModelWillSavedEmitter.event;
 
     constructor(@inject(MonacoTextModelService) monacoModelService: MonacoTextModelService,
         @inject(MonacoWorkspace) monacoWorkspace: MonacoWorkspace) {
@@ -108,4 +96,7 @@ export class EditorModelServiceImpl implements EditorModelService {
         return results.reduce((a, b) => a && b, true);
     }
 
+    async createModelReference(uri: URI): Promise<Reference<MonacoEditorModel>> {
+        return this.monacoModelService.createModelReference(uri);
+    }
 }

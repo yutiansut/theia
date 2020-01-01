@@ -18,8 +18,7 @@ import * as theia from '@theia/plugin';
 import { DocumentsExtImpl } from '../documents';
 import * as Converter from '../type-converters';
 import URI from 'vscode-uri/lib/umd';
-import { FormattingOptions, SingleEditOperation } from '../../api/model';
-import { createToken } from '../token-provider';
+import { FormattingOptions, TextEdit } from '../../common/plugin-api-rpc-model';
 
 export class DocumentFormattingAdapter {
 
@@ -28,7 +27,7 @@ export class DocumentFormattingAdapter {
         private readonly documents: DocumentsExtImpl
     ) { }
 
-    provideDocumentFormattingEdits(resource: URI, options: FormattingOptions): Promise<SingleEditOperation[] | undefined> {
+    provideDocumentFormattingEdits(resource: URI, options: FormattingOptions, token: theia.CancellationToken): Promise<TextEdit[] | undefined> {
         const document = this.documents.getDocumentData(resource);
         if (!document) {
             return Promise.reject(new Error(`There are no document for ${resource}`));
@@ -37,7 +36,7 @@ export class DocumentFormattingAdapter {
         const doc = document.document;
 
         // tslint:disable-next-line:no-any
-        return Promise.resolve(this.provider.provideDocumentFormattingEdits(doc, <any>options, createToken())).then(value => {
+        return Promise.resolve(this.provider.provideDocumentFormattingEdits(doc, <any>options, token)).then(value => {
             if (Array.isArray(value)) {
                 return value.map(Converter.fromTextEdit);
             }

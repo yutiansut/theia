@@ -15,23 +15,22 @@
  ********************************************************************************/
 
 import { injectable, inject, named } from 'inversify';
-import { isWindows, ILogger } from '@theia/core';
+import { isWindows, isOSX, ILogger } from '@theia/core';
 import { FileUri } from '@theia/core/lib/node';
 import {
-    TerminalProcess,
-    RawProcess,
     TerminalProcessOptions,
-    RawProcessOptions,
     RawProcessFactory,
     TerminalProcessFactory,
     ProcessErrorEvent,
+    Process,
+    QuotedString,
 } from '@theia/process/lib/node';
 import { TaskFactory } from './process-task';
 import { TaskRunner } from '../task-runner';
 import { Task } from '../task';
 import { TaskConfiguration } from '../../common/task-protocol';
+import { ProcessTaskError, CommandOptions } from '../../common/process/task-protocol';
 import * as fs from 'fs';
-import { ProcessTaskError } from '../../common/process/task-protocol';
 
 /**
  * Task runner that runs a task as a process or a command inside a shell.
@@ -60,52 +59,32 @@ export class ProcessTaskRunner implements TaskRunner {
             throw new Error("Process task config must have 'command' property specified");
         }
 
-        let command;
-        let args;
-        let options;
-        // on windows, prefer windows-specific options, if available
-        if (isWindows && taskConfig.windows !== undefined) {
-            command = taskConfig.windows.command;
-            args = taskConfig.windows.args;
-            options = taskConfig.windows.options;
-        } else {
-            command = taskConfig.command;
-            args = taskConfig.args;
-            options = taskConfig.options;
-        }
-
-        // sanity checks:
-        // - we expect the cwd to be set by the client.
-        if (!taskConfig.cwd) {
-            throw new Error("Can't run a task when 'cwd' is not provided by the client");
-        }
-
-        const cwd = this.asFsPath(taskConfig.cwd);
-        // Use task's cwd with spawned process and pass node env object to
-        // new process, so e.g. we can re-use the system path
-        options = {
-            cwd: cwd,
-            env: process.env
-        };
-
         try {
-            // use terminal or raw process
-            let proc: TerminalProcess | RawProcess;
+            const { command, args, options } = this.getResolvedCommand(taskConfig);
+
             const processType = taskConfig.type === 'process' ? 'process' : 'shell';
+            let proc: Process;
+
+            // Always spawn a task in a pty, the only difference between shell/process tasks is the
+            // way the command is passed:
+            // - process: directly look for an executable and pass a specific set of arguments/options.
+            // - shell: defer the spawning to a shell that will evaluate a command line with our executable.
             if (processType === 'process') {
-                this.logger.debug('Task: creating underlying raw process');
-                proc = this.rawProcessFactory(<RawProcessOptions>{
-                    command: command,
-                    args: args,
-                    options: options
+                this.logger.debug(`Task: spawning process: ${command} with ${args}`);
+                proc = this.terminalProcessFactory(<TerminalProcessOptions>{
+                    command, args, options: {
+                        ...options,
+                        shell: false,
+                    }
                 });
             } else {
                 // all Task types without specific TaskRunner will be run as a shell process e.g.: npm, gulp, etc.
-                this.logger.debug('Task: creating underlying terminal process');
+                this.logger.debug(`Task: executing command through a shell: ${command}`);
                 proc = this.terminalProcessFactory(<TerminalProcessOptions>{
-                    command: command,
-                    args: args,
-                    options: options
+                    command, args, options: {
+                        ...options,
+                        shell: options.shell || true,
+                    },
                 });
             }
 
@@ -130,13 +109,80 @@ export class ProcessTaskRunner implements TaskRunner {
         }
     }
 
-    protected asFsPath(uriOrPath: string) {
+    private getResolvedCommand(taskConfig: TaskConfiguration): {
+        command: string | undefined,
+        args: Array<string | QuotedString> | undefined,
+        options: CommandOptions
+    } {
+        let systemSpecificCommand: {
+            command: string | undefined,
+            args: Array<string | QuotedString> | undefined,
+            options: CommandOptions
+        };
+        // on windows, windows-specific options, if available, take precedence
+        if (isWindows && taskConfig.windows !== undefined) {
+            systemSpecificCommand = this.getSystemSpecificCommand(taskConfig, 'windows');
+        } else if (isOSX && taskConfig.osx !== undefined) { // on macOS, mac-specific options, if available, take precedence
+            systemSpecificCommand = this.getSystemSpecificCommand(taskConfig, 'osx');
+        } else if (!isWindows && !isOSX && taskConfig.linux !== undefined) { // on linux, linux-specific options, if available, take precedence
+            systemSpecificCommand = this.getSystemSpecificCommand(taskConfig, 'linux');
+        } else { // system-specific options are unavailable, use the default
+            systemSpecificCommand = this.getSystemSpecificCommand(taskConfig, undefined);
+        }
+
+        const options = systemSpecificCommand.options;
+        // sanity checks:
+        // - we expect the cwd to be set by the client.
+        if (!options || !options.cwd) {
+            throw new Error("Can't run a task when 'cwd' is not provided by the client");
+        }
+
+        // Use task's cwd with spawned process and pass node env object to
+        // new process, so e.g. we can re-use the system path
+        if (options) {
+            options.env = {
+                ...process.env,
+                ...(options.env || {})
+            };
+        }
+
+        return systemSpecificCommand;
+    }
+
+    private getSystemSpecificCommand(taskConfig: TaskConfiguration, system: 'windows' | 'linux' | 'osx' | undefined): {
+        command: string | undefined,
+        args: Array<string | QuotedString> | undefined,
+        options: CommandOptions
+    } {
+        // initialize with default values from the `taskConfig`
+        let command: string | undefined = taskConfig.command;
+        let args: Array<string | QuotedString> | undefined = taskConfig.args;
+        let options: CommandOptions = taskConfig.options || {};
+
+        if (system) {
+            if (taskConfig[system].command) {
+                command = taskConfig[system].command;
+            }
+            if (taskConfig[system].args) {
+                args = taskConfig[system].args;
+            }
+            if (taskConfig[system].options) {
+                options = taskConfig[system].options;
+            }
+        }
+
+        return { command, args, options };
+    }
+
+    protected asFsPath(uriOrPath: string): string {
         return (uriOrPath.startsWith('file:/'))
             ? FileUri.fsPath(uriOrPath)
             : uriOrPath;
     }
 
     /**
+     * @deprecated
+     *
      * Remove ProcessTaskRunner.findCommand, introduce process "started" event
      * Checks for the existence of a file, at the provided path, and make sure that
      * it's readable and executable.

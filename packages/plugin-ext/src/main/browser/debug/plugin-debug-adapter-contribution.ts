@@ -14,11 +14,11 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { DebugExt, } from '../../../api/plugin-api';
+import { DebugExt, } from '../../../common/plugin-api-rpc';
 import { DebugConfiguration } from '@theia/debug/lib/common/debug-configuration';
-import { IJSONSchemaSnippet, IJSONSchema } from '@theia/core/lib/common/json-schema';
 import { MaybePromise } from '@theia/core/lib/common/types';
 import { DebuggerDescription } from '@theia/debug/lib/common/debug-service';
+import { HostedPluginSupport } from '../../../hosted/browser/hosted-plugin';
 
 /**
  * Plugin [DebugAdapterContribution](#DebugAdapterContribution).
@@ -26,7 +26,8 @@ import { DebuggerDescription } from '@theia/debug/lib/common/debug-service';
 export class PluginDebugAdapterContribution {
     constructor(
         protected readonly description: DebuggerDescription,
-        protected readonly debugExt: DebugExt) { }
+        protected readonly debugExt: DebugExt,
+        protected readonly pluginService: HostedPluginSupport) { }
 
     get type(): string {
         return this.description.type;
@@ -34,18 +35,6 @@ export class PluginDebugAdapterContribution {
 
     get label(): MaybePromise<string | undefined> {
         return this.description.label;
-    }
-
-    get languages(): MaybePromise<string[] | undefined> {
-        return this.debugExt.$getSupportedLanguages(this.type);
-    }
-
-    async getSchemaAttributes(): Promise<IJSONSchema[]> {
-        return this.debugExt.$getSchemaAttributes(this.type);
-    }
-
-    async getConfigurationSnippets(): Promise<IJSONSchemaSnippet[]> {
-        return this.debugExt.$getConfigurationSnippets(this.type);
     }
 
     async provideDebugConfigurations(workspaceFolderUri: string | undefined): Promise<DebugConfiguration[]> {
@@ -57,6 +46,7 @@ export class PluginDebugAdapterContribution {
     }
 
     async createDebugSession(config: DebugConfiguration): Promise<string> {
+        await this.pluginService.activateByDebug('onDebugAdapterProtocolTracker', config.type);
         return this.debugExt.$createDebugSession(config);
     }
 

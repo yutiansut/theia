@@ -16,9 +16,9 @@
 
 import '../../src/browser/style/index.css';
 
-import { ContainerModule } from 'inversify';
-import { ResourceResolver } from '@theia/core/lib/common';
-import { WebSocketConnectionProvider, FrontendApplicationContribution, ConfirmDialog } from '@theia/core/lib/browser';
+import { ContainerModule, interfaces } from 'inversify';
+import { ResourceResolver, CommandContribution } from '@theia/core/lib/common';
+import { WebSocketConnectionProvider, FrontendApplicationContribution, ConfirmDialog, LabelProviderContribution } from '@theia/core/lib/browser';
 import { FileSystem, fileSystemPath, FileShouldOverwrite, FileStat } from '../common';
 import {
     fileSystemWatcherPath, FileSystemWatcherServer,
@@ -29,6 +29,8 @@ import { bindFileSystemPreferences } from './filesystem-preferences';
 import { FileSystemWatcher } from './filesystem-watcher';
 import { FileSystemFrontendContribution } from './filesystem-frontend-contribution';
 import { FileSystemProxyFactory } from './filesystem-proxy-factory';
+import { FileUploadService } from './file-upload-service';
+import { FileTreeLabelProvider } from './file-tree/file-tree-label-provider';
 
 export default new ContainerModule(bind => {
     bindFileSystemPreferences(bind);
@@ -54,8 +56,19 @@ export default new ContainerModule(bind => {
         return WebSocketConnectionProvider.createProxy(ctx.container, fileSystemPath, proxyFactory);
     }).inSingletonScope();
 
+    bindFileResource(bind);
+
+    bind(FileUploadService).toSelf().inSingletonScope();
+
+    bind(FileSystemFrontendContribution).toSelf().inSingletonScope();
+    bind(CommandContribution).toService(FileSystemFrontendContribution);
+    bind(FrontendApplicationContribution).toService(FileSystemFrontendContribution);
+
+    bind(FileTreeLabelProvider).toSelf().inSingletonScope();
+    bind(LabelProviderContribution).toService(FileTreeLabelProvider);
+});
+
+export function bindFileResource(bind: interfaces.Bind): void {
     bind(FileResourceResolver).toSelf().inSingletonScope();
     bind(ResourceResolver).toService(FileResourceResolver);
-
-    bind(FrontendApplicationContribution).to(FileSystemFrontendContribution).inSingletonScope();
-});
+}

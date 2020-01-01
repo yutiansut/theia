@@ -14,28 +14,43 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { injectable } from 'inversify';
-import { PreferenceProvider, PreferenceProviderPriority } from '../';
-import { PreferenceScope } from '../preference-scope';
+// tslint:disable:no-any
 
-@injectable()
+import { interfaces } from 'inversify';
+import { PreferenceProvider } from '../';
+import { PreferenceScope } from '../preference-scope';
+import { PreferenceProviderDataChanges, PreferenceProviderDataChange } from '../preference-provider';
+
 export class MockPreferenceProvider extends PreferenceProvider {
-    // tslint:disable-next-line:no-any
     readonly prefs: { [p: string]: any } = {};
 
-    getPreferences() {
+    constructor(protected scope: PreferenceScope) {
+        super();
+    }
+
+    public emitPreferencesChangedEvent(changes: PreferenceProviderDataChanges | PreferenceProviderDataChange[]): void {
+        super.emitPreferencesChangedEvent(changes);
+    }
+
+    public markReady(): void {
+        this._ready.resolve();
+    }
+
+    getPreferences(): { [p: string]: any } {
         return this.prefs;
     }
-    // tslint:disable-next-line:no-any
-    async setPreference(preferenceName: string, newValue: any, resourceUri?: string): Promise<void> {
+    async setPreference(preferenceName: string, newValue: any, resourceUri?: string): Promise<boolean> {
         const oldValue = this.prefs[preferenceName];
         this.prefs[preferenceName] = newValue;
-        this.emitPreferencesChangedEvent([{ preferenceName, oldValue, newValue, scope: PreferenceScope.User, domain: [] }]);
+        this.emitPreferencesChangedEvent([{ preferenceName, oldValue, newValue, scope: this.scope, domain: [] }]);
+        return true;
     }
-    canProvide(preferenceName: string, resourceUri?: string): { priority: number, provider: PreferenceProvider } {
-        if (this.prefs[preferenceName] === undefined) {
-            return { priority: PreferenceProviderPriority.NA, provider: this };
-        }
-        return { priority: PreferenceProviderPriority.User, provider: this };
-    }
+}
+
+export function bindMockPreferenceProviders(bind: interfaces.Bind, unbind: interfaces.Unbind): void {
+    unbind(PreferenceProvider);
+
+    bind(PreferenceProvider).toDynamicValue(ctx => new MockPreferenceProvider(PreferenceScope.User)).inSingletonScope().whenTargetNamed(PreferenceScope.User);
+    bind(PreferenceProvider).toDynamicValue(ctx => new MockPreferenceProvider(PreferenceScope.Workspace)).inSingletonScope().whenTargetNamed(PreferenceScope.Workspace);
+    bind(PreferenceProvider).toDynamicValue(ctx => new MockPreferenceProvider(PreferenceScope.Folder)).inSingletonScope().whenTargetNamed(PreferenceScope.Folder);
 }

@@ -69,6 +69,7 @@ describe('FileNavigatorTree', () => {
     let mockLabelProvider: LabelProvider;
 
     const mockFilterChangeEmitter: Emitter<void> = new Emitter();
+    const mockLabelChangeEmitter: Emitter<void> = new Emitter();
 
     let navigatorTree: FileNavigatorTree;
 
@@ -91,6 +92,7 @@ describe('FileNavigatorTree', () => {
         testContainer.bind(LabelProvider).toConstantValue(mockLabelProvider);
 
         sinon.stub(mockFileNavigatorFilter, 'onFilterChanged').value(mockFilterChangeEmitter.event);
+        sinon.stub(mockLabelProvider, 'onDidChange').value(mockLabelChangeEmitter.event);
         setup();
 
         navigatorTree = testContainer.get<FileNavigatorTree>(FileNavigatorTree);
@@ -114,14 +116,6 @@ describe('FileNavigatorTree', () => {
             sinon.stub(FileTree.prototype, 'resolveChildren').returns(children);
             await navigatorTree.resolveChildren(workspaceRootFolder);
             expect((<sinon.SinonStub>mockFileNavigatorFilter.filter).calledWith(children)).to.be.true;
-        });
-    });
-
-    describe('createWorkspaceRoot() function', () => {
-        it('should pass arguments to toNode() function', async () => {
-            const stubToNode = sinon.stub(navigatorTree, <any>'toNode').callsFake(() => { });
-            await navigatorTree.createWorkspaceRoot(workspaceRootFolder.fileStat, <WorkspaceNode>root);
-            expect(stubToNode.calledWith(workspaceRootFolder.fileStat, <WorkspaceNode>root)).to.be.true;
         });
     });
 

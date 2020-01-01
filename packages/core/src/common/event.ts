@@ -41,8 +41,8 @@ export interface Event<T> {
 }
 
 export namespace Event {
-    const _disposable = { dispose() { } };
-    export const None: Event<any> = Object.assign(function () { return _disposable; }, {
+    const _disposable = { dispose(): void { } };
+    export const None: Event<any> = Object.assign(function (): { dispose(): void } { return _disposable; }, {
         get maxListeners(): number { return 0; },
         set maxListeners(maxListeners: number) { }
     });
@@ -108,6 +108,7 @@ class CallbackList implements Iterable<Callback> {
         }
     }
 
+    // tslint:disable-next-line:typedef
     public [Symbol.iterator]() {
         if (!this._callbacks) {
             return [][Symbol.iterator]();
@@ -147,9 +148,9 @@ export interface EmitterOptions {
     onLastListenerRemove?: Function;
 }
 
-export class Emitter<T> {
+export class Emitter<T = any> {
 
-    private static _noop = function () { };
+    private static _noop = function (): void { };
 
     private _event: Event<T>;
     private _callbacks: CallbackList | undefined;
@@ -194,8 +195,8 @@ export class Emitter<T> {
 
                 return result;
             }, {
-                    maxListeners: 30
-                }
+                maxListeners: 30
+            }
             );
         }
         return this._event;
@@ -207,7 +208,7 @@ export class Emitter<T> {
         }
         const count = this._callbacks.length;
         if (count > maxListeners) {
-            console.warn(new Error(`Possible Emitter memory leak detected. ${maxListeners} exit listeners added. Use event.maxListeners to increase limit`));
+            console.warn(new Error(`Possible Emitter memory leak detected. ${count} listeners added. Use event.maxListeners to increase the limit (${maxListeners})`));
         }
     }
 
@@ -235,11 +236,57 @@ export class Emitter<T> {
         }
     }
 
-    dispose() {
+    dispose(): void {
         if (this._callbacks) {
             this._callbacks.dispose();
             this._callbacks = undefined;
         }
         this._disposed = true;
+    }
+}
+
+export interface WaitUntilEvent {
+    // tslint:disable:no-any
+    /**
+     * Allows to pause the event loop until the provided thenable resolved.
+     *
+     * *Note:* It can only be called during event dispatch and not in an asynchronous manner
+     *
+     * @param thenable A thenable that delays execution.
+     */
+    waitUntil(thenable: Promise<any>): void;
+    // tslint:enable:no-any
+}
+export namespace WaitUntilEvent {
+    export async function fire<T extends WaitUntilEvent>(
+        emitter: Emitter<T>,
+        event: Pick<T, Exclude<keyof T, 'waitUntil'>>,
+        timeout: number | undefined = undefined
+    ): Promise<void> {
+        const waitables: Promise<void>[] = [];
+        const asyncEvent = Object.assign(event, {
+            // tslint:disable-next-line:no-any
+            waitUntil: (thenable: Promise<any>) => {
+                if (Object.isFrozen(waitables)) {
+                    throw new Error('waitUntil cannot be called asynchronously.');
+                }
+                waitables.push(thenable);
+            }
+        }) as T;
+        try {
+            emitter.fire(asyncEvent);
+            // Asynchronous calls to `waitUntil` should fail.
+            Object.freeze(waitables);
+        } finally {
+            delete asyncEvent['waitUntil'];
+        }
+        if (!waitables.length) {
+            return;
+        }
+        if (timeout !== undefined) {
+            await Promise.race([Promise.all(waitables), new Promise(resolve => setTimeout(resolve, timeout))]);
+        } else {
+            await Promise.all(waitables);
+        }
     }
 }

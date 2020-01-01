@@ -14,10 +14,28 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-.theia-TreeNodeHyperlink {
-    color: var(--theia-accent-color1);
+.theia-tree-view-icon {
+    padding-right: var(--theia-ui-padding);
+    -webkit-font-smoothing: antialiased;
+    flex-shrink: 0;
 }
 
-.theia-TreeNodeHyperlink:focus {
-    border: none;
+.theia-tree-view-inline-action {
+    padding: 2px;
 }
+
+.theia-tree-view-description {
+    color: var(--theia-descriptionForeground);
+    font-size: var(--theia-ui-font-size0);
+    margin-left: var(--theia-ui-padding);
+}
+
+.theia-TreeNodeSegment {
+    display: flex;
+}
+
+.theia-tree-view .theia-TreeNodeContent {
+    align-items: center;
+    height: 100%;
+}
+

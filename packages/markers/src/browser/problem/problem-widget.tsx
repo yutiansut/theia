@@ -23,6 +23,8 @@ import { TreeWidget, TreeProps, ContextMenuRenderer, TreeNode, NodeProps, TreeMo
 import { DiagnosticSeverity } from 'vscode-languageserver-types';
 import * as React from 'react';
 
+export const PROBLEMS_WIDGET_ID = 'problems';
+
 @injectable()
 export class ProblemWidget extends TreeWidget {
 
@@ -34,7 +36,7 @@ export class ProblemWidget extends TreeWidget {
     ) {
         super(treeProps, model, contextMenuRenderer);
 
-        this.id = 'problems';
+        this.id = PROBLEMS_WIDGET_ID;
         this.title.label = 'Problems';
         this.title.caption = 'Problems';
         this.title.iconClass = 'fa problem-tab-icon';
@@ -55,14 +57,38 @@ export class ProblemWidget extends TreeWidget {
         // no-op
     }
     protected superRestoreState(state: object): void {
-        return super.restoreState(state);
+        super.restoreState(state);
+        return;
     }
 
-    protected handleCopy(event: ClipboardEvent) {
+    protected handleClickEvent(node: TreeNode | undefined, event: React.MouseEvent<HTMLElement>): void {
+        super.handleClickEvent(node, event);
+        if (MarkerNode.is(node)) {
+            this.model.revealNode(node);
+        }
+    }
+
+    protected handleCopy(event: ClipboardEvent): void {
         const uris = this.model.selectedNodes.filter(MarkerNode.is).map(node => node.uri.toString());
-        if (uris.length > 0) {
+        if (uris.length > 0 && event.clipboardData) {
             event.clipboardData.setData('text/plain', uris.join('\n'));
             event.preventDefault();
+        }
+    }
+
+    protected handleDown(event: KeyboardEvent): void {
+        const node = this.model.getNextSelectableNode();
+        super.handleDown(event);
+        if (MarkerNode.is(node)) {
+            this.model.revealNode(node);
+        }
+    }
+
+    protected handleUp(event: KeyboardEvent): void {
+        const node = this.model.getPrevSelectableNode();
+        super.handleUp(event);
+        if (MarkerNode.is(node)) {
+            this.model.revealNode(node);
         }
     }
 
@@ -70,7 +96,7 @@ export class ProblemWidget extends TreeWidget {
         if (MarkerRootNode.is(model.root) && model.root.children.length > 0) {
             return super.renderTree(model);
         }
-        return <div className='noMarkers'>No problems have been detected in the workspace so far.</div>;
+        return <div className='theia-widget-noInfo noMarkers'>No problems have been detected in the workspace so far.</div>;
     }
 
     protected renderCaption(node: TreeNode, props: NodeProps): React.ReactNode {
@@ -82,7 +108,7 @@ export class ProblemWidget extends TreeWidget {
         return 'caption';
     }
 
-    protected renderTailDecorations(node: TreeNode, props: NodeProps) {
+    protected renderTailDecorations(node: TreeNode, props: NodeProps): JSX.Element {
         return <div className='row-button-container'>
             {this.renderRemoveButton(node)}
         </div>;
@@ -99,7 +125,9 @@ export class ProblemWidget extends TreeWidget {
             if (problemMarker.data.severity) {
                 severityClass = this.getSeverityClass(problemMarker.data.severity);
             }
-            return <div className='markerNode'>
+            return <div
+                className='markerNode'
+                title={`${problemMarker.data.message} (${problemMarker.data.range.start.line + 1}, ${problemMarker.data.range.start.character + 1})`}>
                 <div>
                     <i className={severityClass}></i>
                 </div>
@@ -129,10 +157,13 @@ export class ProblemWidget extends TreeWidget {
     }
 
     protected decorateMarkerFileNode(node: MarkerInfoNode): React.ReactNode {
+        const icon = this.toNodeIcon(node);
+        const name = this.toNodeName(node);
+        const description = this.toNodeDescription(node);
         return <div className='markerFileNode'>
-            <div className={(node.icon || '') + ' file-icon'}></div>
-            <div title={node.name} className='name'>{node.name}</div>
-            <div title={node.description || ''} className='path'>{node.description || ''}</div>
+            {icon && <div className={icon + ' file-icon'}></div>}
+            <div title={name} className='name'>{name}</div>
+            <div title={description} className='path'>{description}</div>
             <div className='notification-count-container'>
                 <span className='notification-count'>{node.numberOfMarkers.toString()}</span>
             </div>
@@ -148,7 +179,7 @@ export class ProblemMarkerRemoveButton extends React.Component<{ model: ProblemT
     }
 
     protected readonly remove = (e: React.MouseEvent<HTMLElement>) => this.doRemove(e);
-    protected doRemove(e: React.MouseEvent<HTMLElement>) {
+    protected doRemove(e: React.MouseEvent<HTMLElement>): void {
         this.props.model.removeNode(this.props.node);
         e.stopPropagation();
     }

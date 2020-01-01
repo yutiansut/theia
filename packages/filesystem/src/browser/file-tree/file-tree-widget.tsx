@@ -14,13 +14,16 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+import * as React from 'react';
 import { injectable, inject } from 'inversify';
-import { ContextMenuRenderer, NodeProps, TreeProps, TreeNode, TreeWidget } from '@theia/core/lib/browser';
-import { DirNode, FileStatNode } from './file-tree';
-import { FileTreeModel } from './file-tree-model';
 import { DisposableCollection, Disposable } from '@theia/core/lib/common';
 import { UriSelection } from '@theia/core/lib/common/selection';
-import * as React from 'react';
+import { isCancelled } from '@theia/core/lib/common/cancellation';
+import { ContextMenuRenderer, NodeProps, TreeProps, TreeNode, TreeWidget, CompositeTreeNode } from '@theia/core/lib/browser';
+import { FileUploadService } from '../file-upload-service';
+import { DirNode, FileStatNode } from './file-tree';
+import { FileTreeModel } from './file-tree-model';
+import { IconThemeService } from '@theia/core/lib/browser/icon-theme-service';
 
 export const FILE_TREE_CLASS = 'theia-FileTree';
 export const FILE_STAT_NODE_CLASS = 'theia-FileStatNode';
@@ -31,6 +34,12 @@ export const FILE_STAT_ICON_CLASS = 'theia-FileStatIcon';
 export class FileTreeWidget extends TreeWidget {
 
     protected readonly toCancelNodeExpansion = new DisposableCollection();
+
+    @inject(FileUploadService)
+    protected readonly uploadService: FileUploadService;
+
+    @inject(IconThemeService)
+    protected readonly iconThemeService: IconThemeService;
 
     constructor(
         @inject(TreeProps) readonly props: TreeProps,
@@ -54,8 +63,9 @@ export class FileTreeWidget extends TreeWidget {
     }
 
     protected renderIcon(node: TreeNode, props: NodeProps): React.ReactNode {
-        if (FileStatNode.is(node)) {
-            return <div className={(node.icon || '') + ' file-icon'}></div>;
+        const icon = this.toNodeIcon(node);
+        if (icon) {
+            return <div className={icon + ' file-icon'}></div>;
         }
         // tslint:disable-next-line:no-null-keyword
         return null;
@@ -93,7 +103,27 @@ export class FileTreeWidget extends TreeWidget {
 
     protected handleDragStartEvent(node: TreeNode, event: React.DragEvent): void {
         event.stopPropagation();
-        this.setTreeNodeAsData(event.dataTransfer, node);
+        let selectedNodes;
+        if (this.model.selectedNodes.find(selected => TreeNode.equals(selected, node))) {
+            selectedNodes = [...this.model.selectedNodes];
+        } else {
+            selectedNodes = [node];
+        }
+        this.setSelectedTreeNodesAsData(event.dataTransfer, node, selectedNodes);
+        if (event.dataTransfer) {
+            let label: string;
+            if (selectedNodes.length === 1) {
+                label = this.toNodeName(node);
+            } else {
+                label = String(selectedNodes.length);
+            }
+            const dragImage = document.createElement('div');
+            dragImage.className = 'theia-file-tree-drag-image';
+            dragImage.textContent = label;
+            document.body.appendChild(dragImage);
+            event.dataTransfer.setDragImage(dragImage, -10, -10);
+            setTimeout(() => document.body.removeChild(dragImage), 0);
+        }
     }
 
     protected handleDragEnterEvent(node: TreeNode | undefined, event: React.DragEvent): void {
@@ -127,28 +157,90 @@ export class FileTreeWidget extends TreeWidget {
         this.toCancelNodeExpansion.dispose();
     }
 
-    protected handleDropEvent(node: TreeNode | undefined, event: React.DragEvent): void {
-        event.preventDefault();
-        event.stopPropagation();
-        event.dataTransfer.dropEffect = 'copy'; // Explicitly show this is a copy.
-        const containing = DirNode.getContainingDir(node);
-        if (containing) {
-            const source = this.getTreeNodeFromData(event.dataTransfer);
-            if (source) {
-                this.model.move(source, containing);
-            } else {
-                this.model.upload(containing, event.dataTransfer.items);
+    protected async handleDropEvent(node: TreeNode | undefined, event: React.DragEvent): Promise<void> {
+        try {
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = 'copy'; // Explicitly show this is a copy.
+            const containing = this.getDropTargetDirNode(node);
+            if (containing) {
+                const resources = this.getSelectedTreeNodesFromData(event.dataTransfer);
+                if (resources.length > 0) {
+                    for (const treeNode of resources) {
+                        await this.model.move(treeNode, containing);
+                    }
+                } else {
+                    await this.uploadService.upload(containing.uri, { source: event.dataTransfer });
+                }
+            }
+        } catch (e) {
+            if (!isCancelled(e)) {
+                console.error(e);
             }
         }
+    }
+
+    protected getDropTargetDirNode(node: TreeNode | undefined): DirNode | undefined {
+        if (CompositeTreeNode.is(node) && node.id === 'WorkspaceNodeId') {
+            if (node.children.length === 1) {
+                return DirNode.getContainingDir(node.children[0]);
+            } else if (node.children.length > 1) {
+                // move file to the last root folder in multi-root scenario
+                return DirNode.getContainingDir(node.children[node.children.length - 1]);
+            }
+        }
+        return DirNode.getContainingDir(node);
     }
 
     protected setTreeNodeAsData(data: DataTransfer, node: TreeNode): void {
         data.setData('tree-node', node.id);
     }
 
+    protected setSelectedTreeNodesAsData(data: DataTransfer, sourceNode: TreeNode, relatedNodes: TreeNode[]): void {
+        this.setTreeNodeAsData(data, sourceNode);
+        data.setData('selected-tree-nodes', JSON.stringify(relatedNodes.map(node => node.id)));
+    }
+
     protected getTreeNodeFromData(data: DataTransfer): TreeNode | undefined {
         const id = data.getData('tree-node');
         return this.model.getNode(id);
+    }
+    protected getSelectedTreeNodesFromData(data: DataTransfer): TreeNode[] {
+        const resources = data.getData('selected-tree-nodes');
+        if (!resources) {
+            return [];
+        }
+        const ids: string[] = JSON.parse(resources);
+        return ids.map(id => this.model.getNode(id)).filter(node => node !== undefined) as TreeNode[];
+    }
+
+    protected get hidesExplorerArrows(): boolean {
+        const theme = this.iconThemeService.getDefinition(this.iconThemeService.current);
+        return !!theme && !!theme.hidesExplorerArrows;
+    }
+
+    protected renderExpansionToggle(node: TreeNode, props: NodeProps): React.ReactNode {
+        if (this.hidesExplorerArrows) {
+            // tslint:disable-next-line:no-null-keyword
+            return null;
+        }
+        return super.renderExpansionToggle(node, props);
+    }
+
+    protected getPaddingLeft(node: TreeNode, props: NodeProps): number {
+        if (this.hidesExplorerArrows) {
+            // aditional left padding instead of top-level expansion toggle
+            return super.getPaddingLeft(node, props) + this.props.leftPadding;
+        }
+        return super.getPaddingLeft(node, props);
+    }
+
+    protected needsExpansionTogglePadding(node: TreeNode): boolean {
+        const theme = this.iconThemeService.getDefinition(this.iconThemeService.current);
+        if (theme && (theme.hidesExplorerArrows || (theme.hasFileIcons && !theme.hasFolderIcons))) {
+            return false;
+        }
+        return super.needsExpansionTogglePadding(node);
     }
 
 }

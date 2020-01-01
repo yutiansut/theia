@@ -14,11 +14,13 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
+// tslint:disable:no-any
+
 import { injectable, decorate, unmanaged } from 'inversify';
 import { Widget } from '@phosphor/widgets';
 import { Message } from '@phosphor/messaging';
-import { Disposable, DisposableCollection, MaybePromise } from '../../common';
-import { KeyCode, KeysOrKeyCodes } from '../keys';
+import { Emitter, Event, Disposable, DisposableCollection, MaybePromise } from '../../common';
+import { KeyCode, KeysOrKeyCodes } from '../keyboard/keys';
 
 import PerfectScrollbar from 'perfect-scrollbar';
 
@@ -37,7 +39,18 @@ export const FOCUS_CLASS = 'theia-mod-focus';
 @injectable()
 export class BaseWidget extends Widget {
 
-    protected readonly toDispose = new DisposableCollection();
+    protected readonly onScrollYReachEndEmitter = new Emitter<void>();
+    readonly onScrollYReachEnd: Event<void> = this.onScrollYReachEndEmitter.event;
+    protected readonly onScrollUpEmitter = new Emitter<void>();
+    readonly onScrollUp: Event<void> = this.onScrollUpEmitter.event;
+    protected readonly onDidChangeVisibilityEmitter = new Emitter<boolean>();
+    readonly onDidChangeVisibility = this.onDidChangeVisibilityEmitter.event;
+
+    protected readonly toDispose = new DisposableCollection(
+        this.onScrollYReachEndEmitter,
+        this.onScrollUpEmitter,
+        this.onDidChangeVisibilityEmitter
+    );
     protected readonly toDisposeOnDetach = new DisposableCollection();
     protected scrollBar?: PerfectScrollbar;
     protected scrollOptions?: PerfectScrollbar.Options;
@@ -81,13 +94,15 @@ export class BaseWidget extends Widget {
                 const container = await this.getScrollContainer();
                 container.style.overflow = 'hidden';
                 this.scrollBar = new PerfectScrollbar(container, this.scrollOptions);
+                this.disableScrollBarFocus(container);
+                this.toDisposeOnDetach.push(addEventListener(container, <any>'ps-y-reach-end', () => { this.onScrollYReachEndEmitter.fire(undefined); }));
+                this.toDisposeOnDetach.push(addEventListener(container, <any>'ps-scroll-up', () => { this.onScrollUpEmitter.fire(undefined); }));
                 this.toDisposeOnDetach.push(Disposable.create(() => {
                     if (this.scrollBar) {
                         this.scrollBar.destroy();
                         this.scrollBar = undefined;
                     }
-                    // tslint:disable-next-line:no-null-keyword
-                    container.style.overflow = null;
+                    container.style.overflow = 'initial';
                 }));
             })();
         }
@@ -95,6 +110,17 @@ export class BaseWidget extends Widget {
 
     protected getScrollContainer(): MaybePromise<HTMLElement> {
         return this.node;
+    }
+
+    protected disableScrollBarFocus(scrollContainer: HTMLElement): void {
+        for (const thumbs of [scrollContainer.getElementsByClassName('ps__thumb-x'), scrollContainer.getElementsByClassName('ps__thumb-y')]) {
+            for (let i = 0; i < thumbs.length; i++) {
+                const element = thumbs.item(i);
+                if (element) {
+                    element.removeAttribute('tabIndex');
+                }
+            }
+        }
     }
 
     protected onUpdateRequest(msg: Message): void {
@@ -124,6 +150,20 @@ export class BaseWidget extends Widget {
 
     protected addClipboardListener<K extends 'cut' | 'copy' | 'paste'>(element: HTMLElement, type: K, listener: EventListenerOrEventListenerObject<K>): void {
         this.toDisposeOnDetach.push(addClipboardListener(element, type, listener));
+    }
+
+    setFlag(flag: Widget.Flag): void {
+        super.setFlag(flag);
+        if (flag === Widget.Flag.IsVisible) {
+            this.onDidChangeVisibilityEmitter.fire(this.isVisible);
+        }
+    }
+
+    clearFlag(flag: Widget.Flag): void {
+        super.clearFlag(flag);
+        if (flag === Widget.Flag.IsVisible) {
+            this.onDidChangeVisibilityEmitter.fire(this.isVisible);
+        }
     }
 }
 

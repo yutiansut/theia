@@ -15,15 +15,14 @@
  ********************************************************************************/
 
 import { injectable, inject } from 'inversify';
-import { LabelProviderContribution, LabelProvider } from '@theia/core/lib/browser/label-provider';
+import { LabelProviderContribution, LabelProvider, DidChangeLabelEvent } from '@theia/core/lib/browser/label-provider';
 import URI from '@theia/core/lib/common/uri';
 import { GIT_RESOURCE_SCHEME } from './git-resource';
-import { MaybePromise } from '@theia/core';
 
 @injectable()
 export class GitUriLabelProviderContribution implements LabelProviderContribution {
 
-    constructor( @inject(LabelProvider) protected labelProvider: LabelProvider) {
+    constructor(@inject(LabelProvider) protected labelProvider: LabelProvider) {
     }
 
     canHandle(element: object): number {
@@ -41,15 +40,20 @@ export class GitUriLabelProviderContribution implements LabelProviderContributio
         return this.labelProvider.getName(this.toFileUri(uri)) + this.getTagSuffix(uri);
     }
 
-    getIcon(uri: URI): MaybePromise<string> {
+    getIcon(uri: URI): string {
         return this.labelProvider.getIcon(this.toFileUri(uri));
     }
 
-    protected toFileUri(uri: URI) {
+    affects(uri: URI, event: DidChangeLabelEvent): boolean {
+        const fileUri = this.toFileUri(uri);
+        return event.affects(fileUri) || event.affects(fileUri.withoutQuery().withoutFragment());
+    }
+
+    protected toFileUri(uri: URI): URI {
         return uri.withScheme('file');
     }
 
-    protected getTagSuffix(uri: URI) {
+    protected getTagSuffix(uri: URI): string {
         if (uri.query) {
             return ` (${uri.query})`;
         } else {

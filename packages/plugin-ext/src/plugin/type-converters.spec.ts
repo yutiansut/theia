@@ -18,9 +18,9 @@ import * as assert from 'assert';
 import * as Converter from './type-converters';
 import * as theia from '@theia/plugin';
 import * as types from './types-impl';
-import * as model from '../api/model';
+import * as model from '../common/plugin-api-rpc-model';
 import { MarkdownString, isMarkdownString } from './markdown-string';
-import { ProcessTaskDto, TaskDto } from '../api/plugin-api';
+import { TaskDto } from '../common/plugin-api-rpc';
 
 describe('Type converters:', () => {
 
@@ -169,23 +169,34 @@ describe('Type converters:', () => {
     });
 
     describe('convert tasks:', () => {
-        const type = 'shell';
+        const customType = 'custom';
+        const shellType = 'shell';
         const label = 'yarn build';
         const source = 'source';
         const command = 'yarn';
+        const commandLine = 'yarn run build';
         const args = ['run', 'build'];
         const cwd = '/projects/theia';
         const additionalProperty = 'some property';
 
-        const shellTaskDto: ProcessTaskDto = {
-            type,
+        const shellTaskDto: TaskDto = {
+            type: shellType,
             label,
             source,
             scope: undefined,
             command,
             args,
-            cwd,
-            options: {},
+            options: { cwd },
+            additionalProperty
+        };
+
+        const shellTaskDtoWithCommandLine: TaskDto = {
+            type: shellType,
+            label,
+            source,
+            scope: undefined,
+            command: commandLine,
+            options: { cwd },
             additionalProperty
         };
 
@@ -193,7 +204,7 @@ describe('Type converters:', () => {
             name: label,
             source,
             definition: {
-                type,
+                type: shellType,
                 additionalProperty
             },
             execution: {
@@ -205,25 +216,41 @@ describe('Type converters:', () => {
             }
         };
 
-        const taskDtoWithCommandLine: ProcessTaskDto = {
-            type,
-            label,
-            source,
-            scope: undefined,
-            command,
-            args,
-            cwd,
-            options: {}
-        };
-
         const pluginTaskWithCommandLine: theia.Task = {
             name: label,
             source,
             definition: {
-                type
+                type: shellType,
+                additionalProperty
             },
             execution: {
-                commandLine: 'yarn run build',
+                commandLine,
+                options: {
+                    cwd
+                }
+            }
+        };
+
+        const customTaskDto: TaskDto = { ...shellTaskDto, type: customType };
+
+        const customTaskDtoWithCommandLine: TaskDto = { ...shellTaskDtoWithCommandLine, type: customType };
+
+        const customPluginTask: theia.Task = {
+            ...shellPluginTask, definition: {
+                type: customType,
+                additionalProperty
+            }
+        };
+
+        const customPluginTaskWithCommandLine: theia.Task = {
+            name: label,
+            source,
+            definition: {
+                type: customType,
+                additionalProperty
+            },
+            execution: {
+                commandLine,
                 options: {
                     cwd
                 }
@@ -243,6 +270,18 @@ describe('Type converters:', () => {
             // when
             const result: theia.Task = Converter.toTask(shellTaskDto);
 
+            assert.strictEqual(result.execution instanceof types.ShellExecution, true);
+
+            if (result.execution instanceof types.ShellExecution) {
+                assert.strictEqual(result.execution.commandLine, undefined);
+
+                result.execution = {
+                    args: result.execution.args,
+                    options: result.execution.options,
+                    command: result.execution.command
+                };
+            }
+
             // then
             assert.notEqual(result, undefined);
             assert.deepEqual(result, shellPluginTask);
@@ -254,7 +293,45 @@ describe('Type converters:', () => {
 
             // then
             assert.notEqual(result, undefined);
-            assert.deepEqual(result, taskDtoWithCommandLine);
+            assert.deepEqual(result, shellTaskDtoWithCommandLine);
+        });
+
+        it('should convert task with custom type to dto', () => {
+            // when
+            const result: TaskDto | undefined = Converter.fromTask(customPluginTask);
+
+            // then
+            assert.notEqual(result, undefined);
+            assert.deepEqual(result, customTaskDto);
+        });
+
+        it('should convert task with custom type from dto', () => {
+            // when
+            const result: theia.Task = Converter.toTask(customTaskDto);
+
+            assert.strictEqual(result.execution instanceof types.ShellExecution, true);
+
+            if (result.execution instanceof types.ShellExecution) {
+                assert.strictEqual(result.execution.commandLine, undefined);
+
+                result.execution = {
+                    args: result.execution.args,
+                    options: result.execution.options,
+                    command: result.execution.command
+                };
+            }
+
+            // then
+            assert.deepEqual(result, customPluginTask);
+        });
+
+        it('should convert to task dto from custom task with commandline', () => {
+            // when
+            const result: TaskDto | undefined = Converter.fromTask(customPluginTaskWithCommandLine);
+
+            // then
+            assert.notEqual(result, undefined);
+            assert.deepEqual(result, customTaskDtoWithCommandLine);
         });
     });
 

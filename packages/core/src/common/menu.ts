@@ -21,6 +21,11 @@ import { ContributionProvider } from './contribution-provider';
 
 export interface MenuAction {
     commandId: string
+    /**
+     * In addition to the mandatory command property, an alternative command can be defined.
+     * It will be shown and invoked when pressing Alt while opening a menu.
+     */
+    alt?: string;
     label?: string
     icon?: string
     order?: string
@@ -40,7 +45,15 @@ export type MenuPath = string[];
 export const MAIN_MENU_BAR: MenuPath = ['menubar'];
 
 export const MenuContribution = Symbol('MenuContribution');
+
+/**
+ * Representation of a menu contribution.
+ */
 export interface MenuContribution {
+    /**
+     * Registers menus.
+     * @param menus the menu model registry.
+     */
     registerMenus(menus: MenuModelRegistry): void;
 }
 
@@ -113,7 +126,8 @@ export class MenuModelRegistry {
 
         if (menuPath) {
             const parent = this.findGroup(menuPath);
-            return parent.removeNode(id);
+            parent.removeNode(id);
+            return;
         }
 
         // Recurse all menus, removing any menus matching the id
@@ -203,7 +217,7 @@ export class CompositeMenuNode implements MenuNode {
         };
     }
 
-    public removeNode(id: string) {
+    public removeNode(id: string): void {
         const node = this._children.find(n => n.id === id);
         if (node) {
             const idx = this._children.indexOf(node);
@@ -213,7 +227,7 @@ export class CompositeMenuNode implements MenuNode {
         }
     }
 
-    get sortString() {
+    get sortString(): string {
         return this.id;
     }
 
@@ -227,10 +241,17 @@ export class CompositeMenuNode implements MenuNode {
 }
 
 export class ActionMenuNode implements MenuNode {
+
+    readonly altNode: ActionMenuNode | undefined;
+
     constructor(
         public readonly action: MenuAction,
         protected readonly commands: CommandRegistry
-    ) { }
+    ) {
+        if (action.alt) {
+            this.altNode = new ActionMenuNode({ commandId: action.alt }, commands);
+        }
+    }
 
     get id(): string {
         return this.action.commandId;
@@ -255,7 +276,7 @@ export class ActionMenuNode implements MenuNode {
         return command && command.iconClass;
     }
 
-    get sortString() {
+    get sortString(): string {
         return this.action.order || this.label;
     }
 }

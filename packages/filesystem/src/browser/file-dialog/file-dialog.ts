@@ -17,7 +17,7 @@
 import { injectable, inject } from 'inversify';
 import { Message } from '@phosphor/messaging';
 import { Disposable, MaybeArray } from '@theia/core/lib/common';
-import { Key } from '@theia/core/lib/browser';
+import { Key, LabelProvider } from '@theia/core/lib/browser';
 import { AbstractDialog, DialogProps, setEnabled, createIconButton, Widget } from '@theia/core/lib/browser';
 import { FileStatNode } from '../file-tree';
 import { LocationListRenderer } from '../location';
@@ -103,6 +103,11 @@ export class SaveFileDialogProps extends FileDialogProps {
      * A human-readable string for the accept button.
      */
     saveLabel?: string;
+
+    /**
+     * A human-readable value for the input.
+     */
+    inputValue?: string;
 
 }
 
@@ -261,9 +266,12 @@ export class OpenFileDialog extends FileDialog<MaybeArray<FileStatNode>> {
         }
     }
 
-    protected accept(): void {
-        if (this.props.canSelectFolders === false && !Array.isArray(this.value)) {
-            this.widget.model.openNode(this.value);
+    protected async accept(): Promise<void> {
+        const selection = this.value;
+        if (!this.props.canSelectFolders
+            && !Array.isArray(selection)
+            && selection.fileStat.isDirectory) {
+            this.widget.model.openNode(selection);
             return;
         }
         super.accept();
@@ -274,6 +282,9 @@ export class OpenFileDialog extends FileDialog<MaybeArray<FileStatNode>> {
 export class SaveFileDialog extends FileDialog<URI | undefined> {
 
     protected fileNameField: HTMLInputElement | undefined;
+
+    @inject(LabelProvider)
+    protected readonly labelProvider: LabelProvider;
 
     constructor(
         @inject(SaveFileDialogProps) readonly props: SaveFileDialogProps,
@@ -291,9 +302,9 @@ export class SaveFileDialog extends FileDialog<URI | undefined> {
         // Update file name field when changing a selection
         if (this.fileNameField) {
             if (this.widget.model.selectedFileStatNodes.length === 1) {
-                const fileStat = this.widget.model.selectedFileStatNodes[0];
-                if (!fileStat.fileStat.isDirectory) {
-                    this.fileNameField.value = fileStat.name;
+                const node = this.widget.model.selectedFileStatNodes[0];
+                if (!node.fileStat.isDirectory) {
+                    this.fileNameField.value = this.labelProvider.getName(node);
                 }
             } else {
                 this.fileNameField.value = '';
@@ -339,7 +350,8 @@ export class SaveFileDialog extends FileDialog<URI | undefined> {
 
         this.fileNameField = document.createElement('input');
         this.fileNameField.type = 'text';
-        this.fileNameField.classList.add(FILENAME_TEXTFIELD_CLASS);
+        this.fileNameField.classList.add('theia-input', FILENAME_TEXTFIELD_CLASS);
+        this.fileNameField.value = this.props.inputValue || '';
         fileNamePanel.appendChild(this.fileNameField);
 
         this.fileNameField.onkeyup = () => this.validate();

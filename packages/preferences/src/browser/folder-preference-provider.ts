@@ -16,9 +16,10 @@
 
 import { inject, injectable } from 'inversify';
 import URI from '@theia/core/lib/common/uri';
-import { PreferenceScope, PreferenceProvider, PreferenceProviderPriority } from '@theia/core/lib/browser';
+import { PreferenceScope } from '@theia/core/lib/browser';
 import { AbstractResourcePreferenceProvider } from './abstract-resource-preference-provider';
-import { FileSystem, FileStat } from '@theia/filesystem/lib/common';
+import { FileStat } from '@theia/filesystem/lib/common';
+import { WorkspaceService } from '@theia/workspace/lib/browser/workspace-service';
 
 export const FolderPreferenceProviderFactory = Symbol('FolderPreferenceProviderFactory');
 export interface FolderPreferenceProviderFactory {
@@ -27,47 +28,39 @@ export interface FolderPreferenceProviderFactory {
 
 export const FolderPreferenceProviderOptions = Symbol('FolderPreferenceProviderOptions');
 export interface FolderPreferenceProviderOptions {
-    folder: FileStat;
+    readonly folder: FileStat;
+    readonly configUri: URI;
 }
 
 @injectable()
 export class FolderPreferenceProvider extends AbstractResourcePreferenceProvider {
 
-    private folderUri: URI | undefined;
+    @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService;
+    @inject(FolderPreferenceProviderOptions) protected readonly options: FolderPreferenceProviderOptions;
 
-    constructor(
-        @inject(FolderPreferenceProviderOptions) protected readonly options: FolderPreferenceProviderOptions,
-        @inject(FileSystem) protected readonly fileSystem: FileSystem
-    ) {
-        super();
-    }
+    private _folderUri: URI;
 
-    get uri(): URI | undefined {
-        return this.folderUri;
-    }
-
-    async getUri(): Promise<URI | undefined> {
-        this.folderUri = new URI(this.options.folder.uri);
-        if (await this.fileSystem.exists(this.folderUri.toString())) {
-            const uri = this.folderUri.resolve('.theia').resolve('settings.json');
-            return uri;
+    get folderUri(): URI {
+        if (!this._folderUri) {
+            this._folderUri = new URI(this.options.folder.uri);
         }
+        return this._folderUri;
     }
 
-    canProvide(preferenceName: string, resourceUri?: string): { priority: number, provider: PreferenceProvider } {
-        const value = this.get(preferenceName);
-        if (value === undefined || value === null || !resourceUri || !this.folderUri) {
-            return super.canProvide(preferenceName, resourceUri);
+    protected getUri(): URI {
+        return this.options.configUri;
+    }
+
+    protected getScope(): PreferenceScope {
+        if (!this.workspaceService.isMultiRootWorkspaceOpened) {
+            // when FolderPreferenceProvider is used as a delegate of WorkspacePreferenceProvider in a one-folder workspace
+            return PreferenceScope.Workspace;
         }
-        const uri = new URI(resourceUri);
-        return { priority: PreferenceProviderPriority.Folder + this.folderUri.path.relativity(uri.path), provider: this };
-    }
-
-    protected getScope() {
         return PreferenceScope.Folder;
     }
 
     getDomain(): string[] {
-        return this.folderUri ? [this.folderUri.toString()] : [];
+        return [this.folderUri.toString()];
     }
+
 }

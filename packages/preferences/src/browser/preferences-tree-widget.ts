@@ -48,6 +48,8 @@ import { FileSystem, FileSystemUtils } from '@theia/filesystem/lib/common';
 import { UserStorageUri, THEIA_USER_STORAGE_FOLDER } from '@theia/userstorage/lib/browser';
 import { WorkspaceService } from '@theia/workspace/lib/browser/workspace-service';
 import URI from '@theia/core/lib/common/uri';
+import { FoldersPreferencesProvider } from './folders-preferences-provider';
+import { PreferenceConfigurations } from '@theia/core/lib/browser/preferences/preference-configurations';
 
 @injectable()
 export class PreferencesContainer extends SplitPanel implements ApplicationShell.TrackableWidgetProvider, Saveable {
@@ -192,7 +194,7 @@ export class PreferencesContainer extends SplitPanel implements ApplicationShell
         super.onActivateRequest(msg);
     }
 
-    protected onCloseRequest(msg: Message) {
+    protected onCloseRequest(msg: Message): void {
         if (this.treeWidget) {
             this.treeWidget.close();
         }
@@ -279,9 +281,11 @@ export class PreferencesEditorsContainer extends DockPanel {
 
     constructor(
         @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService,
-        @inject(FileSystem) protected readonly fileSystem: FileSystem
+        @inject(FileSystem) protected readonly fileSystem: FileSystem,
+        @inject(PreferenceProvider) @named(PreferenceScope.Folder)
+        protected readonly foldersPreferenceProvider: FoldersPreferencesProvider
     ) {
-        super({ renderer: new PreferenceEditorContainerTabBarRenderer(workspaceService, fileSystem) });
+        super({ renderer: new PreferenceEditorContainerTabBarRenderer(workspaceService, fileSystem, foldersPreferenceProvider) });
     }
 
     dispose(): void {
@@ -289,12 +293,12 @@ export class PreferencesEditorsContainer extends DockPanel {
         super.dispose();
     }
 
-    onCloseRequest(msg: Message) {
+    onCloseRequest(msg: Message): void {
         toArray(this.widgets()).forEach(widget => widget.close());
         super.onCloseRequest(msg);
     }
 
-    onUpdateRequest(msg: Message) {
+    onUpdateRequest(msg: Message): void {
         const editor = this.selectedWidgets().next();
         if (editor) {
             this.onEditorChangedEmitter.fire(<PreferencesEditorWidget>editor);
@@ -313,7 +317,7 @@ export class PreferencesEditorsContainer extends DockPanel {
     }
 
     protected async getUserPreferenceEditorWidget(): Promise<PreferencesEditorWidget> {
-        const userPreferenceUri = this.userPreferenceProvider.getUri();
+        const userPreferenceUri = this.userPreferenceProvider.getConfigUri();
         const userPreferences = await this.editorManager.getOrCreateByUri(userPreferenceUri) as PreferencesEditorWidget;
         userPreferences.title.label = 'User';
         userPreferences.title.caption = `User Preferences: ${await this.getPreferenceEditorCaption(userPreferenceUri)}`;
@@ -335,7 +339,7 @@ export class PreferencesEditorsContainer extends DockPanel {
     }
 
     protected async getWorkspacePreferenceEditorWidget(): Promise<PreferencesEditorWidget | undefined> {
-        const workspacePreferenceUri = await this.workspacePreferenceProvider.getUri();
+        const workspacePreferenceUri = this.workspacePreferenceProvider.getConfigUri();
         const workspacePreferences = workspacePreferenceUri && await this.editorManager.getOrCreateByUri(workspacePreferenceUri) as PreferencesEditorWidget;
 
         if (workspacePreferences) {
@@ -354,9 +358,9 @@ export class PreferencesEditorsContainer extends DockPanel {
         }
     }
 
-    async refreshFoldersPreferencesEditorWidget(currentFolder: string | undefined): Promise<void> {
+    async refreshFoldersPreferencesEditorWidget(currentFolderUri: string | undefined): Promise<void> {
         const folders = this.workspaceService.tryGetRoots().map(r => r.uri);
-        const newFolderUri = currentFolder || folders[0];
+        const newFolderUri = currentFolderUri || folders[0];
         const newFoldersPreferenceEditorWidget = await this.getFoldersPreferencesEditor(newFolderUri);
         if (newFoldersPreferenceEditorWidget && // new widget is created
             // the FolderPreferencesEditor is not available, OR the existing FolderPreferencesEditor is displaying the content of a different file
@@ -377,14 +381,14 @@ export class PreferencesEditorsContainer extends DockPanel {
         }
     }
 
-    protected async getFoldersPreferencesEditor(folder: string | undefined): Promise<PreferencesEditorWidget | undefined> {
+    protected async getFoldersPreferencesEditor(folderUri: string | undefined): Promise<PreferencesEditorWidget | undefined> {
         if (this.workspaceService.saved) {
-            const settingsUri = await this.getFolderSettingsUri(folder);
+            const settingsUri = await this.getFolderSettingsUri(folderUri);
             const foldersPreferences = settingsUri && await this.editorManager.getOrCreateByUri(settingsUri) as PreferencesEditorWidget;
             if (foldersPreferences) {
                 foldersPreferences.title.label = 'Folder';
                 foldersPreferences.title.caption = `Folder Preferences: ${await this.getPreferenceEditorCaption(settingsUri!)}`;
-                foldersPreferences.title.clickableText = new URI(folder).displayName;
+                foldersPreferences.title.clickableText = new URI(folderUri).displayName;
                 foldersPreferences.title.clickableTextTooltip = 'Click to manage preferences in another folder';
                 foldersPreferences.title.clickableTextCallback = async (folderUriStr: string) => {
                     await foldersPreferences.saveable.save();
@@ -397,17 +401,18 @@ export class PreferencesEditorsContainer extends DockPanel {
         }
     }
 
-    private async getFolderSettingsUri(folder: string | undefined): Promise<URI | undefined> {
-        if (folder) {
-            const settingsUri = new URI(folder).resolve('.theia').resolve('settings.json');
-            if (!(await this.fileSystem.exists(settingsUri.toString()))) {
-                await this.fileSystem.createFile(settingsUri.toString());
+    private async getFolderSettingsUri(folderUri: string | undefined): Promise<URI | undefined> {
+        let configUri = this.foldersPreferenceProvider.getConfigUri(folderUri);
+        if (!configUri) {
+            configUri = this.foldersPreferenceProvider.getContainingConfigUri(folderUri);
+            if (configUri) {
+                await this.fileSystem.createFile(configUri.toString());
             }
-            return settingsUri;
         }
+        return configUri;
     }
 
-    activatePreferenceEditor(preferenceScope: PreferenceScope) {
+    activatePreferenceEditor(preferenceScope: PreferenceScope): void {
         for (const widget of toArray(this.widgets())) {
             const preferenceEditor = widget as PreferencesEditorWidget;
             if (preferenceEditor.scope === preferenceScope) {
@@ -423,10 +428,10 @@ export class PreferencesEditorsContainer extends DockPanel {
 
         let uri = preferenceUri;
         if (preferenceUri.scheme === UserStorageUri.SCHEME && homeUri) {
-            uri = homeUri.resolve(THEIA_USER_STORAGE_FOLDER).resolve(preferenceUri.withoutScheme().path);
+            uri = homeUri.resolve(THEIA_USER_STORAGE_FOLDER).resolve(preferenceUri.path);
         }
         return homeUri
-            ? FileSystemUtils.tildifyPath(uri.path.toString(), homeUri.withoutScheme().toString())
+            ? FileSystemUtils.tildifyPath(uri.path.toString(), homeUri.path.toString())
             : uri.path.toString();
     }
 }
@@ -437,8 +442,8 @@ export class PreferencesTreeWidget extends TreeWidget {
     static ID = 'preferences_tree_widget';
 
     private activeFolderUri: string | undefined;
-    private preferencesGroupNames: string[] = [];
-    private readonly properties: { [name: string]: PreferenceDataProperty };
+    private preferencesGroupNames = new Set<string>();
+    private properties: { [name: string]: PreferenceDataProperty };
     private readonly onPreferenceSelectedEmitter: Emitter<{ [key: string]: string }>;
     readonly onPreferenceSelected: Event<{ [key: string]: string }>;
 
@@ -447,6 +452,7 @@ export class PreferencesTreeWidget extends TreeWidget {
     @inject(PreferencesMenuFactory) protected readonly preferencesMenuFactory: PreferencesMenuFactory;
     @inject(PreferenceService) protected readonly preferenceService: PreferenceService;
     @inject(PreferencesDecorator) protected readonly decorator: PreferencesDecorator;
+    @inject(PreferenceConfigurations) protected readonly preferenceConfigs: PreferenceConfigurations;
 
     protected constructor(
         @inject(TreeModel) readonly model: TreeModel,
@@ -462,16 +468,6 @@ export class PreferencesTreeWidget extends TreeWidget {
         this.toDispose.push(this.onPreferenceSelectedEmitter);
 
         this.id = PreferencesTreeWidget.ID;
-
-        this.properties = this.preferenceSchemaProvider.getCombinedSchema().properties;
-        for (const property in this.properties) {
-            if (property) {
-                const group: string = property.substring(0, property.indexOf('.'));
-                if (this.preferencesGroupNames.indexOf(group) < 0) {
-                    this.preferencesGroupNames.push(group);
-                }
-            }
-        }
     }
 
     dispose(): void {
@@ -481,6 +477,9 @@ export class PreferencesTreeWidget extends TreeWidget {
 
     protected onAfterAttach(msg: Message): void {
         this.initializeModel();
+        this.toDisposeOnDetach.push(this.preferenceSchemaProvider.onDidPreferenceSchemaChanged(() => {
+            this.initializeModel();
+        }));
         super.onAfterAttach(msg);
     }
 
@@ -531,8 +530,22 @@ export class PreferencesTreeWidget extends TreeWidget {
     }
 
     protected initializeModel(): void {
+        this.properties = this.preferenceSchemaProvider.getCombinedSchema().properties;
+        for (const property in this.properties) {
+            if (property) {
+                // Compute preference group name and accept those which have the proper format.
+                const group: string = property.substring(0, property.indexOf('.'));
+                if (property.split('.').length > 1) {
+                    this.preferencesGroupNames.add(group);
+                }
+            }
+        }
+
         type GroupNode = SelectableTreeNode & ExpandableTreeNode;
         const preferencesGroups: GroupNode[] = [];
+        const nodes: { [id: string]: PreferenceDataProperty }[] = [];
+        const groupNames: string[] = Array.from(this.preferencesGroupNames).sort((a, b) => this.sort(a, b));
+
         const root: ExpandableTreeNode = {
             id: 'root-node-id',
             name: 'Apply the preference to selected preferences file',
@@ -541,15 +554,21 @@ export class PreferencesTreeWidget extends TreeWidget {
             children: preferencesGroups,
             expanded: true,
         };
-        const nodes: { [id: string]: PreferenceDataProperty }[] = [];
-        for (const group of this.preferencesGroupNames.sort((a, b) => a.localeCompare(b))) {
+
+        for (const group of groupNames) {
             const propertyNodes: SelectableTreeNode[] = [];
             const properties: string[] = [];
+
+            // Add a preference property if it is currently part of the group name.
+            // Properties which satisfy the condition `isSectionName` should not be added.
             for (const property in this.properties) {
-                if (property.split('.', 1)[0] === group) {
+                if (property.split('.', 1)[0] === group &&
+                    !this.preferenceConfigs.isSectionName(property)) {
                     properties.push(property);
                 }
             }
+
+            // Build the group name node (used to categorize common preferences together).
             const preferencesGroup: GroupNode = {
                 id: group + '-id',
                 name: group.toLocaleUpperCase().substring(0, 1) + group.substring(1) + ' (' + properties.length + ')',
@@ -559,8 +578,8 @@ export class PreferencesTreeWidget extends TreeWidget {
                 expanded: false,
                 selected: false
             };
-            properties.sort((a, b) => a.localeCompare(b));
-            properties.forEach(property => {
+
+            properties.sort((a, b) => this.sort(a, b)).forEach(property => {
                 const node: SelectableTreeNode = {
                     id: property,
                     name: property.substring(property.indexOf('.') + 1),
@@ -577,8 +596,18 @@ export class PreferencesTreeWidget extends TreeWidget {
         this.model.root = root;
     }
 
-    setActiveFolder(folder: string) {
+    setActiveFolder(folder: string): void {
         this.activeFolderUri = folder;
         this.decorator.setActiveFolder(folder);
+    }
+
+    /**
+     * Sort two string.
+     *
+     * @param a the first string.
+     * @param b the second string.
+     */
+    protected sort(a: string, b: string): number {
+        return a.localeCompare(b, undefined, { ignorePunctuation: true });
     }
 }

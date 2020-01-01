@@ -15,6 +15,7 @@
  ********************************************************************************/
 
 import { injectable, inject, named } from 'inversify';
+import { Event, Emitter, WaitUntilEvent } from './event';
 import { Disposable, DisposableCollection } from './disposable';
 import { ContributionProvider } from './contribution-provider';
 
@@ -59,6 +60,21 @@ export namespace Command {
             return 0;
         }
     }
+
+    /**
+     * Determine if two commands are equal.
+     *
+     * @param a the first command for comparison.
+     * @param b the second command for comparison.
+     */
+    export function equals(a: Command, b: Command): boolean {
+        return (
+            a.id === b.id &&
+            a.label === b.label &&
+            a.iconClass === b.iconClass &&
+            a.category === b.category
+        );
+    }
 }
 
 /**
@@ -102,6 +118,10 @@ export interface CommandContribution {
     registerCommands(commands: CommandRegistry): void;
 }
 
+export interface WillExecuteCommandEvent extends WaitUntilEvent {
+    commandId: string;
+}
+
 export const commandServicePath = '/services/commands';
 export const CommandService = Symbol('CommandService');
 /**
@@ -115,6 +135,12 @@ export interface CommandService {
      */
     // tslint:disable-next-line:no-any
     executeCommand<T>(command: string, ...args: any[]): Promise<T | undefined>;
+    /**
+     * An event is emitted when a command is about to be executed.
+     *
+     * It can be used to install or activate a command handler.
+     */
+    readonly onWillExecuteCommand: Event<WillExecuteCommandEvent>;
 }
 
 /**
@@ -125,6 +151,14 @@ export class CommandRegistry implements CommandService {
 
     protected readonly _commands: { [id: string]: Command } = {};
     protected readonly _handlers: { [id: string]: CommandHandler[] } = {};
+
+    protected readonly toUnregisterCommands = new Map<string, Disposable>();
+
+    // List of recently used commands.
+    protected _recent: Command[] = [];
+
+    protected readonly onWillExecuteCommandEmitter = new Emitter<WillExecuteCommandEvent>();
+    readonly onWillExecuteCommand = this.onWillExecuteCommandEmitter.event;
 
     constructor(
         @inject(ContributionProvider) @named(CommandContribution)
@@ -148,13 +182,13 @@ export class CommandRegistry implements CommandService {
             console.warn(`A command ${command.id} is already registered.`);
             return Disposable.NULL;
         }
+        const toDispose = new DisposableCollection(this.doRegisterCommand(command));
         if (handler) {
-            const toDispose = new DisposableCollection();
-            toDispose.push(this.doRegisterCommand(command));
             toDispose.push(this.registerHandler(command.id, handler));
-            return toDispose;
         }
-        return this.doRegisterCommand(command);
+        this.toUnregisterCommands.set(command.id, toDispose);
+        toDispose.push(Disposable.create(() => this.toUnregisterCommands.delete(command.id)));
+        return toDispose;
     }
 
     protected doRegisterCommand(command: Command): Disposable {
@@ -180,9 +214,9 @@ export class CommandRegistry implements CommandService {
     unregisterCommand(id: string): void;
     unregisterCommand(commandOrId: Command | string): void {
         const id = Command.is(commandOrId) ? commandOrId.id : commandOrId;
-
-        if (this._commands[id]) {
-            delete this._commands[id];
+        const toUnregister = this.toUnregisterCommands.get(id);
+        if (toUnregister) {
+            toUnregister.dispose();
         }
     }
 
@@ -210,7 +244,7 @@ export class CommandRegistry implements CommandService {
      */
     // tslint:disable-next-line:no-any
     isEnabled(command: string, ...args: any[]): boolean {
-        return this.getActiveHandler(command, ...args) !== undefined;
+        return typeof this.getActiveHandler(command, ...args) !== 'undefined';
     }
 
     /**
@@ -218,15 +252,15 @@ export class CommandRegistry implements CommandService {
      */
     // tslint:disable-next-line:no-any
     isVisible(command: string, ...args: any[]): boolean {
-        return this.getVisibleHandler(command, ...args) !== undefined;
+        return typeof this.getVisibleHandler(command, ...args) !== 'undefined';
     }
 
     /**
      * Test whether there is a toggled handler for the given command.
      */
-    isToggled(command: string): boolean {
-        const handler = this.getToggledHandler(command);
-        return handler && handler.isToggled ? handler.isToggled() : false;
+    // tslint:disable-next-line:no-any
+    isToggled(command: string, ...args: any[]): boolean {
+        return typeof this.getToggledHandler(command, ...args) !== 'undefined';
     }
 
     /**
@@ -235,14 +269,23 @@ export class CommandRegistry implements CommandService {
      * Reject if a command cannot be executed.
      */
     // tslint:disable-next-line:no-any
-    async executeCommand<T>(command: string, ...args: any[]): Promise<T | undefined> {
-        const handler = this.getActiveHandler(command, ...args);
+    async executeCommand<T>(commandId: string, ...args: any[]): Promise<T | undefined> {
+        await this.fireWillExecuteCommand(commandId);
+        const handler = this.getActiveHandler(commandId, ...args);
         if (handler) {
             const result = await handler.execute(...args);
+            const command = this.getCommand(commandId);
+            if (command) {
+                this.addRecentCommand(command);
+            }
             return result;
         }
         const argsMessage = args && args.length > 0 ? ` (args: ${JSON.stringify(args)})` : '';
-        throw new Error(`The command '${command}' cannot be executed. There are no active handlers available for the command.${argsMessage}`);
+        throw Object.assign(new Error(`The command '${commandId}' cannot be executed. There are no active handlers available for the command.${argsMessage}`), { code: 'NO_ACTIVE_HANDLER' });
+    }
+
+    protected async fireWillExecuteCommand(commandId: string): Promise<void> {
+        await WaitUntilEvent.fire(this.onWillExecuteCommandEmitter, { commandId }, 30000);
     }
 
     /**
@@ -253,8 +296,12 @@ export class CommandRegistry implements CommandService {
         const handlers = this._handlers[commandId];
         if (handlers) {
             for (const handler of handlers) {
-                if (!handler.isVisible || handler.isVisible(...args)) {
-                    return handler;
+                try {
+                    if (!handler.isVisible || handler.isVisible(...args)) {
+                        return handler;
+                    }
+                } catch (error) {
+                    console.error(error);
                 }
             }
         }
@@ -269,8 +316,12 @@ export class CommandRegistry implements CommandService {
         const handlers = this._handlers[commandId];
         if (handlers) {
             for (const handler of handlers) {
-                if (!handler.isEnabled || handler.isEnabled(...args)) {
-                    return handler;
+                try {
+                    if (!handler.isEnabled || handler.isEnabled(...args)) {
+                        return handler;
+                    }
+                } catch (error) {
+                    console.error(error);
                 }
             }
         }
@@ -280,16 +331,30 @@ export class CommandRegistry implements CommandService {
     /**
      * Get a toggled handler for the given command or `undefined`.
      */
-    getToggledHandler(commandId: string): CommandHandler | undefined {
+    // tslint:disable-next-line:no-any
+    getToggledHandler(commandId: string, ...args: any[]): CommandHandler | undefined {
         const handlers = this._handlers[commandId];
         if (handlers) {
             for (const handler of handlers) {
-                if (handler.isToggled) {
-                    return handler;
+                try {
+                    if (handler.isToggled && handler.isToggled(...args)) {
+                        return handler;
+                    }
+                } catch (error) {
+                    console.error(error);
                 }
             }
         }
         return undefined;
+    }
+
+    /**
+     * Returns with all handlers for the given command. If the command does not have any handlers,
+     * or the command is not registered, returns an empty array.
+     */
+    getAllHandlers(commandId: string): CommandHandler[] {
+        const handlers = this._handlers[commandId];
+        return handlers ? handlers.slice() : [];
     }
 
     /**
@@ -319,4 +384,46 @@ export class CommandRegistry implements CommandService {
     get commandIds(): string[] {
         return Object.keys(this._commands);
     }
+
+    /**
+     * Get the list of recently used commands.
+     */
+    get recent(): Command[] {
+        return this._recent;
+    }
+
+    /**
+     * Set the list of recently used commands.
+     * @param commands the list of recently used commands.
+     */
+    set recent(commands: Command[]) {
+        this._recent = commands;
+    }
+
+    /**
+     * Adds a command to recently used list.
+     * Prioritizes commands that were recently executed to be most recent.
+     *
+     * @param recent a recent command, or array of recent commands.
+     */
+    addRecentCommand(recent: Command | Command[]): void {
+        if (Array.isArray(recent)) {
+            recent.forEach((command: Command) => this.addRecentCommand(command));
+        } else {
+            // Determine if the command currently exists in the recently used list.
+            const index = this._recent.findIndex((command: Command) => Command.equals(recent, command));
+            // If the command exists, remove it from the array so it can later be placed at the top.
+            if (index >= 0) { this._recent.splice(index, 1); }
+            // Add the recent command to the beginning of the array (most recent).
+            this._recent.unshift(recent);
+        }
+    }
+
+    /**
+     * Clear the list of recently used commands.
+     */
+    clearCommandHistory(): void {
+        this.recent = [];
+    }
+
 }

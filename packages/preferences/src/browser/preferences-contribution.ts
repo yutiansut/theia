@@ -29,6 +29,8 @@ import { FileSystem } from '@theia/filesystem/lib/common';
 import { UserStorageService } from '@theia/userstorage/lib/browser';
 import { PreferencesContainer } from './preferences-tree-widget';
 import { EditorManager } from '@theia/editor/lib/browser';
+import { isFirefox } from '@theia/core/lib/browser';
+import { isOSX } from '@theia/core/lib/common/os';
 
 @injectable()
 export class PreferencesContribution extends AbstractViewContribution<PreferencesContainer> {
@@ -61,6 +63,12 @@ export class PreferencesContribution extends AbstractViewContribution<Preference
     }
 
     registerKeybindings(keybindings: KeybindingRegistry): void {
+        if (isOSX && !isFirefox) {
+            keybindings.registerKeybinding({
+                command: CommonCommands.OPEN_PREFERENCES.id,
+                keybinding: 'cmd+,'
+            });
+        }
         keybindings.registerKeybinding({
             command: CommonCommands.OPEN_PREFERENCES.id,
             keybinding: 'ctrl+,'
@@ -68,7 +76,7 @@ export class PreferencesContribution extends AbstractViewContribution<Preference
     }
 
     protected async openPreferences(preferenceScope: PreferenceScope): Promise<void> {
-        const wsUri = await this.workspacePreferenceProvider.getUri();
+        const wsUri = this.workspacePreferenceProvider.getConfigUri();
         if (wsUri && !await this.filesystem.exists(wsUri.toString())) {
             await this.filesystem.createFile(wsUri.toString());
         }

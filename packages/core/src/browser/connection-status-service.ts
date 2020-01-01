@@ -20,7 +20,7 @@ import { Event, Emitter } from '../common/event';
 import { DefaultFrontendApplicationContribution } from './frontend-application';
 import { StatusBar, StatusBarAlignment } from './status-bar/status-bar';
 import { WebSocketConnectionProvider } from './messaging/ws-connection-provider';
-import { Disposable } from '../common';
+import { Disposable, DisposableCollection } from '../common';
 
 /**
  * Service for listening on backend connection changes.
@@ -88,15 +88,15 @@ export abstract class AbstractConnectionStatusService implements ConnectionStatu
 
     constructor(@inject(ConnectionStatusOptions) @optional() protected readonly options: ConnectionStatusOptions = ConnectionStatusOptions.DEFAULT) { }
 
-    get onStatusChange() {
+    get onStatusChange(): Event<ConnectionStatus> {
         return this.statusChangeEmitter.event;
     }
 
-    get currentStatus() {
+    get currentStatus(): ConnectionStatus {
         return this.connectionStatus;
     }
 
-    dispose() {
+    dispose(): void {
         this.statusChangeEmitter.dispose();
         if (this.timer) {
             this.clearTimeout(this.timer);
@@ -121,7 +121,7 @@ export abstract class AbstractConnectionStatusService implements ConnectionStatu
         }, this.options.offlineTimeout);
     }
 
-    protected fireStatusChange(status: ConnectionStatus) {
+    protected fireStatusChange(status: ConnectionStatus): void {
         this.statusChangeEmitter.fire(status);
     }
 
@@ -145,7 +145,7 @@ export class FrontendConnectionStatusService extends AbstractConnectionStatusSer
     @inject(PingService) protected readonly pingService: PingService;
 
     @postConstruct()
-    protected init() {
+    protected init(): void {
         this.schedulePing();
         this.wsConnectionProvider.onIncomingMessageActivity(() => {
             // natural activity
@@ -154,7 +154,7 @@ export class FrontendConnectionStatusService extends AbstractConnectionStatusSer
         });
     }
 
-    protected schedulePing() {
+    protected schedulePing(): void {
         if (this.scheduledPing) {
             this.clearTimeout(this.scheduledPing);
         }
@@ -172,6 +172,8 @@ export class FrontendConnectionStatusService extends AbstractConnectionStatusSer
 
 @injectable()
 export class ApplicationConnectionStatusContribution extends DefaultFrontendApplicationContribution {
+
+    protected readonly toDisposeOnOnline = new DisposableCollection();
 
     constructor(
         @inject(ConnectionStatusService) protected readonly connectionStatusService: ConnectionStatusService,
@@ -197,20 +199,19 @@ export class ApplicationConnectionStatusContribution extends DefaultFrontendAppl
 
     private statusbarId = 'connection-status';
 
-    protected handleOnline() {
-        this.statusBar.setBackgroundColor(undefined);
-        this.statusBar.setColor(undefined);
-        this.statusBar.removeElement(this.statusbarId);
+    protected handleOnline(): void {
+        this.toDisposeOnOnline.dispose();
     }
 
-    protected handleOffline() {
+    protected handleOffline(): void {
         this.statusBar.setElement(this.statusbarId, {
             alignment: StatusBarAlignment.LEFT,
             text: 'Offline',
             tooltip: 'Cannot connect to backend.',
             priority: 5000
         });
-        this.statusBar.setBackgroundColor('var(--theia-warn-color0)');
-        this.statusBar.setColor('var(--theia-warn-font-color0)');
+        this.toDisposeOnOnline.push(Disposable.create(() => this.statusBar.removeElement(this.statusbarId)));
+        document.body.classList.add('theia-mod-offline');
+        this.toDisposeOnOnline.push(Disposable.create(() => document.body.classList.remove('theia-mod-offline')));
     }
 }

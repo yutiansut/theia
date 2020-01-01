@@ -14,8 +14,10 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import * as path from 'path';
+// tslint:disable-next-line:no-implicit-dependencies
 import * as upath from 'upath';
+
+import * as path from 'path';
 import * as temp from 'temp';
 import * as fs from 'fs-extra';
 import { expect } from 'chai';
@@ -31,7 +33,7 @@ import { createGit } from './test/binding-helper';
 
 const track = temp.track();
 
-describe('git', async function () {
+describe('git', async function (): Promise<void> {
 
     this.timeout(10000);
 
@@ -763,19 +765,27 @@ describe('git', async function () {
 
 });
 
-describe('log', function () {
+describe('log', function (): void {
 
-    // See https://github.com/theia-ide/theia/issues/2143
+    // See https://github.com/eclipse-theia/theia/issues/2143
     it('should not fail when executed from the repository root', async () => {
+        const git = await createGit();
         const root = await createTestRepository(track.mkdirSync('log-test'));
         const localUri = FileUri.create(root).toString();
         const repository = { localUri };
-        const git = await createGit();
         const result = await git.log(repository, { uri: localUri });
-        expect(result.length === 1).to.be.true;
-        expect(result[0].author.email === 'jon@doe.com').to.be.true;
+        expect(result.length).to.be.equal(1);
+        expect(result[0].author.email).to.be.equal('jon@doe.com');
     });
 
+    it('should not fail when executed against an empty repository', async () => {
+        const git = await createGit();
+        const root = await initRepository(track.mkdirSync('empty-log-test'));
+        const localUri = FileUri.create(root).toString();
+        const repository = { localUri };
+        const result = await git.log(repository, { uri: localUri });
+        expect(result.length).to.be.equal(0);
+    });
 });
 
 function toPathSegment(repository: Repository, uri: string): string {

@@ -13,7 +13,7 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
-
+import { TaskIdentifier } from '@theia/task/lib/common';
 // tslint:disable:no-any
 
 export type DebugViewLocation = 'default' | 'left' | 'right' | 'bottom';
@@ -62,9 +62,15 @@ export interface DebugConfiguration {
 
     /** default: neverOpen */
     internalConsoleOptions?: 'neverOpen' | 'openOnSessionStart' | 'openOnFirstSessionStart'
+
+    /** Task to run before debug session starts */
+    preLaunchTask?: string | TaskIdentifier;
+
+    /** Task to run after debug session ends */
+    postDebugTask?: string | TaskIdentifier;
 }
 export namespace DebugConfiguration {
     export function is(arg: DebugConfiguration | any): arg is DebugConfiguration {
-        return !!arg && 'type' in arg && 'name' in arg && 'request' in arg;
+        return !!arg && typeof arg === 'object' && 'type' in arg && 'name' in arg && 'request' in arg;
     }
 }

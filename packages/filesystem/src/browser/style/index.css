@@ -16,3 +16,20 @@
 
 @import './file-dialog.css';
 @import './file-icons.css';
+
+.theia-file-tree-drag-image {
+  position: absolute;
+  /*
+    make sure you don't see it flashing
+     */
+  top: -1000px;
+  font-size: var(--theia-ui-font-size1);
+  display: inline-block;
+  padding: 1px calc(var(--theia-ui-padding)*2);
+  border-radius: 10px;
+
+  background: var(--theia-list-activeSelectionBackground);
+  color: var(--theia-list-activeSelectionForeground);
+  outline: 1px solid var(--theia-contrastActiveBorder); 
+  outline-offset: -1px;
+}

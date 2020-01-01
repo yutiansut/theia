@@ -1,12 +1,12 @@
 {
   "name": "@theia/java",
-  "version": "0.5.0",
+  "version": "0.14.0",
   "description": "Theia - Java Extension",
   "dependencies": {
-    "@theia/core": "^0.5.0",
-    "@theia/editor": "^0.5.0",
-    "@theia/languages": "^0.5.0",
-    "@theia/monaco": "^0.5.0",
+    "@theia/core": "^0.14.0",
+    "@theia/editor": "^0.14.0",
+    "@theia/languages": "^0.14.0",
+    "@theia/monaco": "^0.14.0",
     "@types/glob": "^5.0.30",
     "@types/tar": "4.0.0",
     "glob": "^7.1.2",
@@ -15,7 +15,7 @@
     "tar": "^4.0.0"
   },
   "devDependencies": {
-    "@theia/ext-scripts": "^0.5.0"
+    "@theia/ext-scripts": "^0.14.0"
   },
   "scripts": {
     "prepare": "yarn run clean && yarn run build",
@@ -24,7 +24,6 @@
     "build": "theiaext build",
     "watch": "theiaext watch",
     "test": "theiaext test",
-    "docs": "theiaext docs",
     "dev-server": "node ./scripts/get-dev-server.js"
   },
   "publishConfig": {
@@ -42,12 +41,12 @@
   "license": "EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/theia-ide/theia.git"
+    "url": "https://github.com/eclipse-theia/theia.git"
   },
   "bugs": {
-    "url": "https://github.com/theia-ide/theia/issues"
+    "url": "https://github.com/eclipse-theia/theia/issues"
   },
-  "homepage": "https://github.com/theia-ide/theia",
+  "homepage": "https://github.com/eclipse-theia/theia",
   "files": [
     "lib",
     "scripts",
@@ -58,6 +57,6 @@
     "extends": "../../configs/nyc.json"
   },
   "ls": {
-    "downloadUrl": "http://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz"
+    "downloadUrl": "https://download.eclipse.org/jdtls/snapshots/jdt-language-server-latest.tar.gz"
   }
 }

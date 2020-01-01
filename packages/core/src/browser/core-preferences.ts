@@ -20,7 +20,7 @@ import { createPreferenceProxy, PreferenceProxy, PreferenceService, PreferenceCo
 export const corePreferenceSchema: PreferenceSchema = {
     'type': 'object',
     properties: {
-        'list.openMode': {
+        'workbench.list.openMode': {
             type: 'string',
             enum: [
                 'singleClick',
@@ -28,6 +28,11 @@ export const corePreferenceSchema: PreferenceSchema = {
             ],
             default: 'singleClick',
             description: 'Controls how to open items in trees using the mouse.'
+        },
+        'workbench.editor.highlightModifiedTabs': {
+            'type': 'boolean',
+            'description': 'Controls whether a top border is drawn on modified (dirty) editor tabs or not.',
+            'default': false
         },
         'application.confirmExit': {
             type: 'string',
@@ -38,13 +43,31 @@ export const corePreferenceSchema: PreferenceSchema = {
             ],
             default: 'ifRequired',
             description: 'When to confirm before closing the application window.',
+        },
+        'workbench.commandPalette.history': {
+            type: 'number',
+            default: 50,
+            minimum: 0,
+            description: 'Controls the number of recently used commands to keep in history for the command palette. Set to 0 to disable command history.'
+        },
+        'workbench.colorTheme': {
+            type: 'string',
+            description: 'Specifies the color theme used in the workbench.'
+        },
+        'workbench.iconTheme': {
+            type: ['string', 'null'],
+            description: "Specifies the icon theme used in the workbench or 'null' to not show any file icons."
         }
     }
 };
 
 export interface CoreConfiguration {
     'application.confirmExit': 'never' | 'ifRequired' | 'always';
-    'list.openMode': 'singleClick' | 'doubleClick';
+    'workbench.list.openMode': 'singleClick' | 'doubleClick';
+    'workbench.commandPalette.history': number;
+    'workbench.editor.highlightModifiedTabs': boolean;
+    'workbench.colorTheme'?: string;
+    'workbench.iconTheme'?: string | null;
 }
 
 export const CorePreferences = Symbol('CorePreferences');

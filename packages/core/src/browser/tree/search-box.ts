@@ -17,7 +17,7 @@
 import { SearchBoxDebounce, SearchBoxDebounceOptions } from '../tree/search-box-debounce';
 import { BaseWidget, Message } from '../widgets/widget';
 import { Emitter, Event } from '../../common/event';
-import { KeyCode, Key } from '../keys';
+import { KeyCode, Key } from '../keyboard/keys';
 
 /**
  * Initializer properties for the search box widget.
@@ -111,6 +111,7 @@ export class SearchBox extends BaseWidget {
     }
 
     handle(event: KeyboardEvent): void {
+        event.preventDefault();
         const keyCode = KeyCode.createKeyCode(event);
         if (this.canHandle(keyCode)) {
             if (Key.equals(Key.ESCAPE, keyCode)) {
@@ -122,11 +123,11 @@ export class SearchBox extends BaseWidget {
         }
     }
 
-    protected handleArrowUp() {
+    protected handleArrowUp(): void {
         this.firePrevious();
     }
 
-    protected handleArrowDown() {
+    protected handleArrowDown(): void {
         this.fireNext();
     }
 
@@ -135,7 +136,7 @@ export class SearchBox extends BaseWidget {
         this.fireClose();
     }
 
-    protected handleKey(keyCode: KeyCode) {
+    protected handleKey(keyCode: KeyCode): void {
         const character = Key.equals(Key.BACKSPACE, keyCode) ? '\b' : keyCode.character;
         const data = this.debounce.append(character);
         if (data) {
@@ -171,11 +172,12 @@ export class SearchBox extends BaseWidget {
         this.addClass(SearchBox.Styles.SEARCH_BOX);
 
         const input = document.createElement('input');
-        input.readOnly = true;
+        input.readOnly = false;
         input.type = 'text';
+        input.onkeydown = ev => this.handle.bind(this)(ev);
         input.classList.add(
-            SearchBox.Styles.SEARCH_INPUT,
-            SearchBox.Styles.NON_SELECTABLE
+            'theia-input',
+            SearchBox.Styles.SEARCH_INPUT
         );
         this.node.appendChild(input);
 

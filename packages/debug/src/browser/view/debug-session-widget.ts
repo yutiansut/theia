@@ -15,20 +15,21 @@
  ********************************************************************************/
 
 import { inject, injectable, postConstruct, interfaces, Container } from 'inversify';
-import { Message, ApplicationShell, Widget, SplitPanel, BaseWidget, PanelLayout } from '@theia/core/lib/browser';
+import {
+    Message, ApplicationShell, Widget, BaseWidget, PanelLayout, StatefulWidget, ViewContainer
+} from '@theia/core/lib/browser';
 import { DebugThreadsWidget } from './debug-threads-widget';
 import { DebugStackFramesWidget } from './debug-stack-frames-widget';
 import { DebugBreakpointsWidget } from './debug-breakpoints-widget';
 import { DebugVariablesWidget } from './debug-variables-widget';
 import { DebugToolBar } from './debug-toolbar-widget';
 import { DebugViewModel, DebugViewOptions } from './debug-view-model';
-import { ViewContainer } from '@theia/core/lib/browser/view-container';
 
 export const DebugSessionWidgetFactory = Symbol('DebugSessionWidgetFactory');
 export type DebugSessionWidgetFactory = (options: DebugViewOptions) => DebugSessionWidget;
 
 @injectable()
-export class DebugSessionWidget extends BaseWidget implements ApplicationShell.TrackableWidgetProvider {
+export class DebugSessionWidget extends BaseWidget implements StatefulWidget, ApplicationShell.TrackableWidgetProvider {
 
     static createContainer(parent: interfaces.Container, options: DebugViewOptions): Container {
         const child = new Container({ defaultScope: 'Singleton' });
@@ -47,7 +48,10 @@ export class DebugSessionWidget extends BaseWidget implements ApplicationShell.T
         return DebugSessionWidget.createContainer(parent, options).get(DebugSessionWidget);
     }
 
-    protected readonly container = new SplitPanel();
+    protected viewContainer: ViewContainer;
+
+    @inject(ViewContainer.Factory)
+    protected readonly viewContainerFactory: ViewContainer.Factory;
 
     @inject(DebugViewModel)
     readonly model: DebugViewModel;
@@ -59,7 +63,7 @@ export class DebugSessionWidget extends BaseWidget implements ApplicationShell.T
     protected readonly threads: DebugThreadsWidget;
 
     @inject(DebugStackFramesWidget)
-    protected readonly frames: DebugStackFramesWidget;
+    protected readonly stackFrames: DebugStackFramesWidget;
 
     @inject(DebugVariablesWidget)
     protected readonly variables: DebugVariablesWidget;
@@ -74,24 +78,23 @@ export class DebugSessionWidget extends BaseWidget implements ApplicationShell.T
         this.title.closable = true;
         this.title.iconClass = 'fa debug-tab-icon';
         this.addClass('theia-session-container');
+
+        this.viewContainer = this.viewContainerFactory({
+            id: 'debug:view-container'
+        });
+        this.viewContainer.addWidget(this.threads, { weight: 30 });
+        this.viewContainer.addWidget(this.stackFrames, { weight: 20 });
+        this.viewContainer.addWidget(this.variables, { weight: 10 });
+        this.viewContainer.addWidget(this.breakpoints, { weight: 10 });
+
         this.toDispose.pushAll([
             this.toolbar,
-            this.threads,
-            this.frames,
-            this.variables,
-            this.breakpoints,
-            this.container
+            this.viewContainer
         ]);
-
-        this.container.addClass('theia-debug-widget-container');
-        this.container.addWidget(this.createViewContainer(this.threads));
-        this.container.addWidget(this.createViewContainer(this.frames));
-        this.container.addWidget(this.createViewContainer(this.variables));
-        this.container.addWidget(this.createViewContainer(this.breakpoints));
 
         const layout = this.layout = new PanelLayout();
         layout.addWidget(this.toolbar);
-        layout.addWidget(this.container);
+        layout.addWidget(this.viewContainer);
     }
 
     protected onActivateRequest(msg: Message): void {
@@ -99,27 +102,16 @@ export class DebugSessionWidget extends BaseWidget implements ApplicationShell.T
         this.toolbar.focus();
     }
 
-    protected createViewContainer(widget: Widget): Widget {
-        const viewContainer = new ViewContainer();
-        viewContainer.addWidget(widget);
-        return viewContainer;
-    }
-
     getTrackableWidgets(): Widget[] {
-        return [
-            this.threads,
-            this.frames,
-            this.variables,
-            this.breakpoints
-        ];
+        return this.viewContainer.getTrackableWidgets();
     }
 
-    onAfterAttach(msg: Message): void {
-        const parentId = this.node.parentElement!.parentElement!.getAttribute('id');
-        this.container.orientation =
-            parentId === 'theia-bottom-content-panel' || parentId === 'theia-main-content-panel'
-                ? 'horizontal'
-                : 'vertical';
-        super.onAfterAttach(msg);
+    storeState(): object {
+        return this.viewContainer.storeState();
     }
+
+    restoreState(oldState: ViewContainer.State): void {
+        this.viewContainer.restoreState(oldState);
+    }
+
 }

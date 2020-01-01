@@ -26,7 +26,56 @@ body {
   padding: 0;
   overflow: hidden;
   font-family: var(--theia-ui-font-family);
-  background: var(--theia-layout-color0);
+  background: var(--theia-editor-background);
+  color: var(--theia-foreground);
+  border: 1px solid var(--theia-window-activeBorder);
+}
+body:window-inactive,
+body:-moz-window-inactive {
+  border-color: var(--theia-window-inactiveBorder);
+}
+
+a {
+    color: var(--theia-textLink-foreground);
+}
+
+a:active, a:hover {
+    color: var(--theia-textLink-activeForeground);
+}
+
+code {
+    color: var(--theia-textPreformat-foreground);
+}
+
+blockquote {
+    color: var(--theia-textBlockQuote-background);
+    border: var(--theia-border-width) solid var(--theia-textBlockQuote-border);
+}
+
+.theia-input {
+    background: var(--theia-input-background);
+    color: var(--theia-input-foreground);
+    border: var(--theia-border-width) solid var(--theia-input-border);
+    font-family: var(--theia-ui-font-family);
+    font-size: var(--theia-ui-font-size1);
+    line-height: var(--theia-content-line-height);
+    padding-left: 5px;
+}
+
+.theia-input::placeholder {
+    color: var(--theia-input-placeholderForeground);
+}
+
+.theia-maximized {
+    position: fixed !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: auto !important;
+    height: auto !important;
+    z-index: 255 !important;
+    background: var(--theia-editor-background);
 }
 
 .theia-ApplicationShell {
@@ -35,7 +84,7 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  background: var(--theia-layout-color0);
+  background: var(--theia-editor-background);
 }
 
 .theia-preload {
@@ -45,7 +94,7 @@ body {
   right: 0;
   bottom: 0;
   z-index: 50000;
-  background: var(--theia-layout-color0);
+  background: var(--theia-editor-background);
   background-image: var(--theia-preloader);
   background-size: 60px 60px;
   background-repeat: no-repeat;
@@ -66,14 +115,13 @@ body {
 }
 
 .theia-mod-disabled {
-  opacity: 0.4;
+  opacity: var(--theia-mod-disabled-opacity);
 }
 
 .theia-header {
   text-transform: uppercase;
   font-size: var(--theia-ui-font-size0);
-  font-weight: 800;
-  margin: 10px 0 5px 0;
+  font-weight: 450;
 }
 
 .p-Widget {
@@ -95,73 +143,82 @@ body {
 }
 
 :focus {
-  outline: none;
-  border-style: solid;
-  border-width: 1px;
-  border-color: var(--theia-accent-color3);
+    outline-width: 1px;
+    outline-style: solid;
+    outline-offset: -1px;
+    opacity: 1 !important;
+    outline-color: var(--theia-focusBorder);
 }
 
 ::selection {
-    background: var(--theia-selected-text-background);
+    background: var(--theia-selection-background);
 }
 
 .p-Widget:focus {
     border: none;
+    outline: none;
 }
 
 button.theia-button, .theia-button {
     border: none;
-    color: var(--theia-ui-button-font-color);
-    background-color: var(--theia-ui-button-color);
+    color: var(--theia-button-foreground);
+    background-color: var(--theia-button-background);
     min-width: 65px;
     outline: none;
     cursor: pointer;
-    padding-left: 9px;
-    padding-right: 9px;
-    padding-top: 4px;
-    padding-bottom: 4px;
+    padding: 4px 9px;
     margin-left: calc(var(--theia-ui-padding)*2);
     border-radius: 1px;
     box-shadow: 0px 1px 5px 0px rgba(0, 0, 0, 0.2), 0px 1px 2px 0px rgba(0, 0, 0, 0.14), 0px 1px 1px -2px rgba(0, 0, 0, 0.12);
     transition: background-color 250ms cubic-bezier(0.4, 0, 0.2, 1) 0ms,box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1) 0ms;
 }
 
-button.theia-button:hover, .theia-button:hover {
-  background-color: var(--theia-ui-button-color-hover);
+button.theia-button:hover, .theia-button:hover, .theia-button:focus {
+  background-color: var(--theia-button-hoverBackground);
 }
 
 button.secondary, .theia-button.secondary {
-  color: var(--theia-ui-button-font-color-secondary);
-  background-color: var(--theia-ui-button-color-secondary);
+  color: var(--theia-secondaryButton-foreground);
+  background-color: var(--theia-secondaryButton-background);
 }
 
 button.secondary:hover, .theia-button.secondary:hover {
-  background-color: var(--theia-ui-button-color-secondary-hover);
+  background-color: var(--theia-secondaryButton-hoverBackground);
 }
 
 button.theia-button[disabled], .theia-button[disabled] {
   opacity: 0.6;
-  color: var(--theia-ui-button-font-color-disabled);
-  background-color: var(--theia-ui-button-color-disabled);
+  color: var(--theia-button-disabledForeground);
+  background-color: var(--theia-button-disabledBackground);
   cursor: default;
 }
 
 button.secondary[disabled], .theia-button.secondary[disabled] {
-    color: var(--theia-ui-button-font-color-secondary-disabled);
-    background-color: var(--theia-ui-button-color-secondary-disabled);
+    color: var(--theia-secondaryButton-disabledForeground);
+    background-color: var(--theia-secondaryButton-disabledBackground);
 }
 
-.p-Widget select {
-    color: var(--theia-ui-font-color1);
+.theia-select {
+    color: var(--dropdown-foreground);
     font-size: var(--theia-ui-font-size1);
     border-radius: 0;
-    border: 1px solid var(--theia-border-color1);
-    background: var(--theia-layout-color2);
+    border: 1px solid var(--theia-dropdown-border);
+    background: var(--theia-dropdown-background);
     outline: none;
 }
 
-textarea {
-  font-family: var(--theia-ui-font-family);
+.theia-select option {
+    background: var(--theia-dropdown-listBackground);
+}
+
+.theia-transparent-overlay {
+    background-color: transparent;
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 100%;
+    z-index: 999;
 }
 
 /*-----------------------------------------------------------------------------
@@ -173,7 +230,6 @@ textarea {
 @import './menus.css';
 @import './sidepanel.css';
 @import './tabs.css';
-@import './materialcolors.css';
 @import './scrollbars.css';
 @import './tree.css';
 @import './status-bar.css';
@@ -185,3 +241,6 @@ textarea {
 @import './notification.css';
 @import './alert-messages.css';
 @import './icons.css';
+@import './widget.css';
+@import './quick-title-bar.css';
+@import './progress-bar.css';

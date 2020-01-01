@@ -16,14 +16,12 @@
 
 import { inject, injectable } from 'inversify';
 import URI from '@theia/core/lib/common/uri';
+import { isChrome } from '@theia/core/lib/browser/browser';
+import { environment } from '@theia/application-package/lib/environment';
 import { SelectionService } from '@theia/core/lib/common/selection-service';
 import { Command, CommandContribution, CommandRegistry } from '@theia/core/lib/common/command';
-import { UriAwareCommandHandler, UriCommandHandler } from '@theia/core/lib/common/uri-command-handler';
-import { ExpandableTreeNode } from '@theia/core/lib/browser/tree';
+import { UriAwareCommandHandler } from '@theia/core/lib/common/uri-command-handler';
 import { FileDownloadService } from './file-download-service';
-import { FileSelection } from '../file-selection';
-import { TreeWidgetSelection } from '@theia/core/lib/browser/tree/tree-widget-selection';
-import { isCancelled } from '@theia/core/lib/common/cancellation';
 
 @injectable()
 export class FileDownloadCommandContribution implements CommandContribution {
@@ -35,48 +33,30 @@ export class FileDownloadCommandContribution implements CommandContribution {
     protected readonly selectionService: SelectionService;
 
     registerCommands(registry: CommandRegistry): void {
-        const handler = new UriAwareCommandHandler<URI[]>(this.selectionService, this.downloadHandler(), { multi: true });
-        registry.registerCommand(FileDownloadCommands.DOWNLOAD, handler);
-        registry.registerCommand(FileDownloadCommands.UPLOAD, new FileSelection.CommandHandler(this.selectionService, {
-            multi: false,
-            isEnabled: selection => this.canUpload(selection),
-            isVisible: selection => this.canUpload(selection),
-            execute: selection => this.upload(selection)
-        }));
+        registry.registerCommand(
+            FileDownloadCommands.DOWNLOAD,
+            new UriAwareCommandHandler<URI[]>(this.selectionService, {
+                execute: uris => this.executeDownload(uris),
+                isEnabled: uris => this.isDownloadEnabled(uris),
+                isVisible: uris => this.isDownloadVisible(uris),
+            }, { multi: true })
+        );
+        registry.registerCommand(
+            FileDownloadCommands.COPY_DOWNLOAD_LINK,
+            new UriAwareCommandHandler<URI[]>(this.selectionService, {
+                execute: uris => this.executeDownload(uris, { copyLink: true }),
+                isEnabled: uris => isChrome && this.isDownloadEnabled(uris),
+                isVisible: uris => isChrome && this.isDownloadVisible(uris),
+            }, { multi: true })
+        );
     }
 
-    protected canUpload({ fileStat }: FileSelection): boolean {
-        return fileStat.isDirectory;
-    }
-
-    protected async upload(selection: FileSelection): Promise<void> {
-        try {
-            const source = TreeWidgetSelection.getSource(this.selectionService.selection);
-            await this.downloadService.upload(selection.fileStat.uri);
-            if (ExpandableTreeNode.is(selection) && source) {
-                await source.model.expandNode(selection);
-            }
-        } catch (e) {
-            if (!isCancelled(e)) {
-                console.error(e);
-            }
-        }
-    }
-
-    protected downloadHandler(): UriCommandHandler<URI[]> {
-        return {
-            execute: uris => this.executeDownload(uris),
-            isEnabled: uris => this.isDownloadEnabled(uris),
-            isVisible: uris => this.isDownloadVisible(uris),
-        };
-    }
-
-    protected async executeDownload(uris: URI[]): Promise<void> {
-        this.downloadService.download(uris);
+    protected async executeDownload(uris: URI[], options?: { copyLink?: boolean }): Promise<void> {
+        this.downloadService.download(uris, options);
     }
 
     protected isDownloadEnabled(uris: URI[]): boolean {
-        return uris.length > 0 && uris.every(u => u.scheme === 'file');
+        return !environment.electron.is() && uris.length > 0 && uris.every(u => u.scheme === 'file');
     }
 
     protected isDownloadVisible(uris: URI[]): boolean {
@@ -93,10 +73,10 @@ export namespace FileDownloadCommands {
         label: 'Download'
     };
 
-    export const UPLOAD: Command = {
-        id: 'file.upload',
+    export const COPY_DOWNLOAD_LINK: Command = {
+        id: 'file.copyDownloadLink',
         category: 'File',
-        label: 'Upload Files...'
+        label: 'Copy Download Link'
     };
 
 }

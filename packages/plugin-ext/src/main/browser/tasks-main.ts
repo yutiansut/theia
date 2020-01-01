@@ -17,78 +17,147 @@
 import {
     TasksMain,
     MAIN_RPC_CONTEXT,
-    TasksExt
-} from '../../api/plugin-api';
-import { RPCProtocol } from '../../api/rpc-protocol';
-import { DisposableCollection } from '@theia/core';
+    TaskExecutionDto,
+    TasksExt,
+    TaskDto
+} from '../../common/plugin-api-rpc';
+import { RPCProtocol } from '../../common/rpc-protocol';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common';
 import { TaskProviderRegistry, TaskResolverRegistry, TaskProvider, TaskResolver } from '@theia/task/lib/browser/task-contribution';
 import { interfaces } from 'inversify';
-import { WorkspaceService } from '@theia/workspace/lib/browser/workspace-service';
-import { TaskInfo, TaskExitedEvent } from '@theia/task/lib/common/task-protocol';
+import { TaskInfo, TaskExitedEvent, TaskConfiguration } from '@theia/task/lib/common/task-protocol';
 import { TaskWatcher } from '@theia/task/lib/common/task-watcher';
 import { TaskService } from '@theia/task/lib/browser/task-service';
+import { TaskDefinitionRegistry } from '@theia/task/lib/browser';
 
-export class TasksMainImpl implements TasksMain {
-    private workspaceRootUri: string | undefined = undefined;
-
+export class TasksMainImpl implements TasksMain, Disposable {
     private readonly proxy: TasksExt;
-    private readonly disposables = new Map<number, monaco.IDisposable>();
     private readonly taskProviderRegistry: TaskProviderRegistry;
     private readonly taskResolverRegistry: TaskResolverRegistry;
     private readonly taskWatcher: TaskWatcher;
     private readonly taskService: TaskService;
-    private readonly workspaceService: WorkspaceService;
+    private readonly taskDefinitionRegistry: TaskDefinitionRegistry;
 
-    constructor(rpc: RPCProtocol, container: interfaces.Container, ) {
+    private readonly taskProviders = new Map<number, Disposable>();
+    private readonly toDispose = new DisposableCollection();
+
+    constructor(rpc: RPCProtocol, container: interfaces.Container) {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.TASKS_EXT);
         this.taskProviderRegistry = container.get(TaskProviderRegistry);
         this.taskResolverRegistry = container.get(TaskResolverRegistry);
-        this.workspaceService = container.get(WorkspaceService);
         this.taskWatcher = container.get(TaskWatcher);
         this.taskService = container.get(TaskService);
+        this.taskDefinitionRegistry = container.get(TaskDefinitionRegistry);
 
-        this.workspaceService.roots.then(roots => {
-            const root = roots[0];
-            if (root) {
-                this.workspaceRootUri = root.uri;
-            }
-        });
+        this.toDispose.push(this.taskWatcher.onTaskCreated((event: TaskInfo) => {
+            this.proxy.$onDidStartTask({
+                id: event.taskId,
+                task: event.config
+            });
+        }));
 
-        this.taskWatcher.onTaskCreated((event: TaskInfo) => {
-            if (event.ctx === this.workspaceRootUri) {
-                this.proxy.$onDidStartTask({
+        this.toDispose.push(this.taskWatcher.onTaskExit((event: TaskExitedEvent) => {
+            this.proxy.$onDidEndTask(event.taskId);
+        }));
+
+        this.toDispose.push(this.taskWatcher.onDidStartTaskProcess((event: TaskInfo) => {
+            if (event.processId !== undefined) {
+                this.proxy.$onDidStartTaskProcess(event.processId, {
                     id: event.taskId,
                     task: event.config
                 });
             }
-        });
+        }));
 
-        this.taskWatcher.onTaskExit((event: TaskExitedEvent) => {
-            if (event.ctx === this.workspaceRootUri) {
-                this.proxy.$onDidEndTask(event.taskId);
+        this.toDispose.push(this.taskWatcher.onDidEndTaskProcess((event: TaskExitedEvent) => {
+            if (event.code !== undefined) {
+                this.proxy.$onDidEndTaskProcess(event.code, event.taskId);
             }
-        });
+        }));
+    }
+
+    dispose(): void {
+        this.toDispose.dispose();
     }
 
     $registerTaskProvider(handle: number, type: string): void {
         const taskProvider = this.createTaskProvider(handle);
         const taskResolver = this.createTaskResolver(handle);
 
-        const disposable = new DisposableCollection();
-        disposable.push(this.taskProviderRegistry.register(type, taskProvider));
-        disposable.push(this.taskResolverRegistry.register(type, taskResolver));
-        this.disposables.set(handle, disposable);
+        const toDispose = new DisposableCollection(
+            this.taskProviderRegistry.register(type, taskProvider, handle),
+            this.taskResolverRegistry.register(type, taskResolver),
+            Disposable.create(() => this.taskProviders.delete(handle))
+        );
+        this.taskProviders.set(handle, toDispose);
+        this.toDispose.push(toDispose);
     }
 
     $unregister(handle: number): void {
-        const disposable = this.disposables.get(handle);
+        const disposable = this.taskProviders.get(handle);
         if (disposable) {
             disposable.dispose();
-            this.disposables.delete(handle);
         }
     }
 
-    async $taskExecutions() {
+    async $fetchTasks(taskVersion: string | undefined, taskType: string | undefined): Promise<TaskDto[]> {
+        if (taskVersion && !taskVersion.startsWith('2.')) { // Theia does not support 1.x or earlier task versions
+            return [];
+        }
+
+        let found: TaskConfiguration[] = [];
+        const tasks = [...(await this.taskService.getConfiguredTasks()), ...(await this.taskService.getProvidedTasks())];
+        if (taskType) {
+            found = tasks.filter(t => {
+                if (!!this.taskDefinitionRegistry.getDefinition(t)) {
+                    return t._source === taskType;
+                }
+                return t.type === taskType;
+            });
+        } else {
+            found = tasks;
+        }
+
+        const filtered: TaskConfiguration[] = [];
+        found.forEach((taskConfig, index) => {
+            const rest = found.slice(index + 1);
+            const isDuplicate = rest.some(restTask => this.taskDefinitionRegistry.compareTasks(taskConfig, restTask));
+            if (!isDuplicate) {
+                filtered.push(taskConfig);
+            }
+        });
+        return filtered.map(taskConfig => {
+            const dto: TaskDto = {
+                type: taskConfig.type,
+                label: taskConfig.label
+            };
+            const { _scope, _source, ...properties } = taskConfig;
+            dto.scope = _scope;
+            dto.source = _source;
+            for (const key in properties) {
+                if (properties.hasOwnProperty(key)) {
+                    dto[key] = properties[key];
+                }
+            }
+            return dto;
+        });
+    }
+
+    async $executeTask(taskDto: TaskDto): Promise<TaskExecutionDto | undefined> {
+        const taskConfig = this.toTaskConfiguration(taskDto);
+        const taskInfo = await this.taskService.runTask(taskConfig);
+        if (taskInfo) {
+            return {
+                id: taskInfo.taskId,
+                task: taskInfo.config
+            };
+        }
+    }
+
+    async $taskExecutions(): Promise<{
+        id: number;
+        task: TaskConfiguration;
+    }[]> {
         const runningTasks = await this.taskService.getRunningTasks();
         return runningTasks.map(taskInfo => ({
             id: taskInfo.taskId,
@@ -105,10 +174,7 @@ export class TasksMainImpl implements TasksMain {
             provideTasks: () =>
                 this.proxy.$provideTasks(handle).then(v =>
                     v!.map(taskDto =>
-                        Object.assign(taskDto, {
-                            _source: taskDto.source || 'plugin',
-                            _scope: taskDto.scope
-                        })
+                        this.toTaskConfiguration(taskDto)
                     )
                 )
         };
@@ -118,11 +184,15 @@ export class TasksMainImpl implements TasksMain {
         return {
             resolveTask: taskConfig =>
                 this.proxy.$resolveTask(handle, taskConfig).then(v =>
-                    Object.assign(v!, {
-                        _source: v!.source || 'plugin',
-                        _scope: v!.scope
-                    })
+                    this.toTaskConfiguration(v!)
                 )
         };
+    }
+
+    protected toTaskConfiguration(taskDto: TaskDto): TaskConfiguration {
+        return Object.assign(taskDto, {
+            _source: taskDto.source || 'plugin',
+            _scope: taskDto.scope
+        });
     }
 }

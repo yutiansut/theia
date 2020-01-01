@@ -117,11 +117,9 @@ export interface FrontendApplicationConfig extends ApplicationConfig {
 export interface BackendApplicationConfig extends ApplicationConfig {
 
     /**
-     * The default backend startup timeout in milliseconds. If specified here, then this value will be used as opposed to the default timeout.
-     * If the `--startup-timeout` option is defined, this configuration value has no effect. A negative values will disable the timeout.
-     * For more details, see [`startupTimeoutOption`](MasterProcess#startupTimeoutOption).
+     * If true and in Electron mode, only one instance of the application is allowed to run at a time.
      */
-    readonly startupTimeout?: number;
+    singleInstance?: boolean;
 
 }
 

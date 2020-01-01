@@ -14,9 +14,6 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-.fa-spinner {
-    color: var(--theia-ui-font-color1);
-}
 
 .spinnerContainer {
     width: 100%;
@@ -30,12 +27,6 @@
     display: flex;
 }
 
-.noWrapInfo {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
 .row {
     width: 100%;
 }
@@ -45,16 +36,13 @@
 }
 
 .extensionHeaderContainer {
-    background: var(--theia-layout-color1);
     margin-bottom: 5px;
-    color: var(--theia-ui-font-color1);
 }
 
 .extensionButton {
     background-color: var(--theia-success-color1);
     padding: 2px;
     box-sizing: border-box;
-    color: var(--theia-ui-icon-font-color);
     width: 65px;
     text-align: center;
     font-size: var(--theia-ui-font-size0);
@@ -76,19 +64,11 @@
 }
 
 .extensionButton.installed {
-    background-color: var(--theia-error-color1);
-}
-
-.extensionButton.outdated {
-    background-color: var(--theia-accent-color2);
+    background-color: var(--theia-editorError-foreground);
 }
 
 .extensionButton.installed:hover {
-    background-color: var(--theia-error-color0);
-}
-
-.extensionButton.outdated:hover {
-    background-color: var(--theia-accent-color1);
+    background-color: var(--theia-errorBackground);
 }
 
 @import './extension-sidebar.css';

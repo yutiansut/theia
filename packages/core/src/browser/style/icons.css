@@ -15,19 +15,25 @@
  ********************************************************************************/
 
 .theia-open-change-icon {
-    width: 16px;
-    height: 16px;
+    width: var(--theia-icon-size);
+    height: var(--theia-icon-size);
     background: var(--theia-icon-open-change) no-repeat;
 }
 
 .theia-open-file-icon {
-    width: 16px;
-    height: 16px;
+    width: var(--theia-icon-size);
+    height: var(--theia-icon-size);
     background: var(--theia-icon-open-file) no-repeat;
 }
 
 .theia-open-preview-icon {
-    width: 16px;
-    height: 16px;
+    width: var(--theia-icon-size);
+    height: var(--theia-icon-size);
     background: var(--theia-icon-preview) no-repeat;
+}
+
+.theia-open-json-icon {
+    width: var(--theia-icon-size);
+    height: var(--theia-icon-size);
+    background: var(--theia-icon-open-json) no-repeat;
 }

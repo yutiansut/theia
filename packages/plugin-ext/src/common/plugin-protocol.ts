@@ -14,14 +14,17 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 import { JsonRpcServer } from '@theia/core/lib/common/messaging/proxy-factory';
-import { RPCProtocol } from '../api/rpc-protocol';
+import { RPCProtocol } from './rpc-protocol';
 import { Disposable } from '@theia/core/lib/common/disposable';
 import { LogPart, KeysToAnyValues, KeysToKeysToAnyValue } from './types';
-import { CharacterPair, CommentRule, PluginAPIFactory, Plugin } from '../api/plugin-api';
+import { CharacterPair, CommentRule, PluginAPIFactory, Plugin } from './plugin-api-rpc';
 import { ExtPluginApi } from './plugin-ext-api-contribution';
 import { IJSONSchema, IJSONSchemaSnippet } from '@theia/core/lib/common/json-schema';
 import { RecursivePartial } from '@theia/core/lib/common/types';
 import { PreferenceSchema, PreferenceSchemaProperties } from '@theia/core/lib/common/preferences/preference-schema';
+import { ProblemMatcherContribution, ProblemPatternContribution, TaskDefinition } from '@theia/task/lib/common';
+import { FileStat } from '@theia/filesystem/lib/common';
+import { ColorDefinition } from '@theia/core/lib/browser/color-registry';
 
 export const hostedServicePath = '/services/hostedPlugin';
 
@@ -49,13 +52,21 @@ export interface PluginPackage {
     description: string;
     contributes?: PluginPackageContribution;
     packagePath: string;
+    activationEvents?: string[];
+    extensionDependencies?: string[];
+    extensionPack?: string[];
+}
+export namespace PluginPackage {
+    export function toPluginUrl(pck: PluginPackage, relativePath: string): string {
+        return `hostedPlugin/${getPluginId(pck)}/${encodeURIComponent(relativePath)}`;
+    }
 }
 
 /**
  * This interface describes a package.json contribution section object.
  */
 export interface PluginPackageContribution {
-    configuration?: RecursivePartial<PreferenceSchema>;
+    configuration?: RecursivePartial<PreferenceSchema> | RecursivePartial<PreferenceSchema>[];
     configurationDefaults?: RecursivePartial<PreferenceSchemaProperties>;
     languages?: PluginPackageLanguageContribution[];
     grammars?: PluginPackageGrammarsContribution[];
@@ -63,9 +74,15 @@ export interface PluginPackageContribution {
     views?: { [location: string]: PluginPackageView[] };
     commands?: PluginPackageCommand | PluginPackageCommand[];
     menus?: { [location: string]: PluginPackageMenu[] };
-    keybindings?: PluginPackageKeybinding[];
+    keybindings?: PluginPackageKeybinding | PluginPackageKeybinding[];
     debuggers?: PluginPackageDebuggersContribution[];
     snippets: PluginPackageSnippetsContribution[];
+    themes?: PluginThemeContribution[];
+    iconThemes?: PluginIconThemeContribution[];
+    colors?: PluginColorContribution[];
+    taskDefinitions?: PluginTaskDefinitionContribution[];
+    problemMatchers?: PluginProblemMatcherContribution[];
+    problemPatterns?: PluginProblemPatternContribution[];
 }
 
 export interface PluginPackageViewContainer {
@@ -77,6 +94,7 @@ export interface PluginPackageViewContainer {
 export interface PluginPackageView {
     id: string;
     name: string;
+    when?: string;
 }
 
 export interface PluginPackageCommand {
@@ -88,6 +106,7 @@ export interface PluginPackageCommand {
 
 export interface PluginPackageMenu {
     command: string;
+    alt?: string;
     group?: string;
     when?: string;
 }
@@ -117,6 +136,30 @@ export interface ScopeMap {
 export interface PluginPackageSnippetsContribution {
     language?: string;
     path?: string;
+}
+
+export interface PluginColorContribution {
+    id?: string;
+    description?: string;
+    defaults?: { light?: string, dark?: string, highContrast?: string };
+}
+
+export type PluginUiTheme = 'vs' | 'vs-dark' | 'hc-black';
+
+export interface PluginThemeContribution {
+    id?: string;
+    label?: string;
+    description?: string;
+    path?: string;
+    uiTheme?: PluginUiTheme;
+}
+
+export interface PluginIconThemeContribution {
+    id?: string;
+    label?: string;
+    description?: string;
+    path?: string;
+    uiTheme?: PluginUiTheme;
 }
 
 export interface PlatformSpecificAdapterContribution {
@@ -169,6 +212,27 @@ export interface PluginPackageLanguageContributionConfiguration {
     folding?: FoldingRules;
 }
 
+export interface PluginTaskDefinitionContribution {
+    type: string;
+    required: string[];
+    properties?: {
+        [name: string]: {
+            type: string;
+            description?: string;
+            // tslint:disable-next-line:no-any
+            [additionalProperty: string]: any;
+        }
+    }
+}
+
+export interface PluginProblemMatcherContribution extends ProblemMatcherContribution {
+    name: string;
+}
+
+export interface PluginProblemPatternContribution extends ProblemPatternContribution {
+    name: string;
+}
+
 export const PluginScanner = Symbol('PluginScanner');
 /**
  * This scanner process package.json object and returns plugin metadata objects.
@@ -193,6 +257,14 @@ export interface PluginScanner {
      * @returns {PluginLifecycle}
      */
     getLifecycle(plugin: PluginPackage): PluginLifecycle;
+
+    getContribution(plugin: PluginPackage): PluginContribution | undefined;
+
+    /**
+     * A mapping between a dependency as its defined in package.json
+     * and its deployable form, e.g. `publisher.name` -> `vscode:extension/publisher.name`
+     */
+    getDependencies(plugin: PluginPackage): Map<string, string> | undefined;
 }
 
 export const PluginDeployer = Symbol('PluginDeployer');
@@ -236,6 +308,8 @@ export interface PluginDeployerResolverInit {
 export interface PluginDeployerResolverContext {
 
     addPlugin(pluginId: string, path: string): void;
+
+    getPlugins(): PluginDeployerEntry[];
 
     getOriginId(): string;
 
@@ -337,18 +411,21 @@ export interface PluginModel {
         type: PluginEngine;
         version: string;
     };
-    entryPoint: {
-        frontend?: string;
-        backend?: string;
-    };
-    contributes?: PluginContribution;
+    entryPoint: PluginEntryPoint;
+    packagePath: string;
+}
+
+export interface PluginEntryPoint {
+    frontend?: string;
+    backend?: string;
 }
 
 /**
  * This interface describes some static plugin contributions.
  */
 export interface PluginContribution {
-    configuration?: PreferenceSchema;
+    activationEvents?: string[];
+    configuration?: PreferenceSchema[];
     configurationDefaults?: PreferenceSchemaProperties;
     languages?: LanguageContribution[];
     grammars?: GrammarsContribution[];
@@ -359,6 +436,12 @@ export interface PluginContribution {
     keybindings?: Keybinding[];
     debuggers?: DebuggerContribution[];
     snippets?: SnippetContribution[];
+    themes?: ThemeContribution[];
+    iconThemes?: IconThemeContribution[];
+    colors?: ColorDefinition[];
+    taskDefinitions?: TaskDefinition[];
+    problemMatchers?: ProblemMatcherContribution[];
+    problemPatterns?: ProblemPatternContribution[];
 }
 
 export interface SnippetContribution {
@@ -367,11 +450,30 @@ export interface SnippetContribution {
     language?: string
 }
 
+export type UiTheme = 'vs' | 'vs-dark' | 'hc-black';
+
+export interface ThemeContribution {
+    id?: string;
+    label?: string;
+    description?: string;
+    uri: string;
+    uiTheme?: UiTheme;
+}
+
+export interface IconThemeContribution {
+    id: string;
+    label?: string;
+    description?: string;
+    uri: string;
+    uiTheme?: UiTheme;
+}
+
 export interface GrammarsContribution {
     format: 'json' | 'plist';
     language?: string;
     scope: string;
     grammar?: string | object;
+    grammarLocation?: string;
     embeddedLanguages?: ScopeMap;
     tokenTypes?: ScopeMap;
     injectTo?: string[];
@@ -462,6 +564,7 @@ export interface ViewContainer {
 export interface View {
     id: string;
     name: string;
+    when?: string;
 }
 
 export interface PluginCommand {
@@ -478,6 +581,7 @@ export type IconUrl = string | { light: string; dark: string; };
  */
 export interface Menu {
     command: string;
+    alt?: string;
     group?: string;
     when?: string;
 }
@@ -535,7 +639,6 @@ export interface ExtensionContext {
 
 export interface PluginMetadata {
     host: string;
-    source: PluginPackage;
     model: PluginModel;
     lifecycle: PluginLifecycle;
 }
@@ -553,48 +656,56 @@ export function buildFrontendModuleName(plugin: PluginPackage | PluginModel): st
     return `${plugin.publisher}_${plugin.name}`.replace(/\W/g, '_');
 }
 
-export interface DebugConfiguration {
-    port?: number;
-    debugMode?: string;
-}
-
 export const HostedPluginClient = Symbol('HostedPluginClient');
 export interface HostedPluginClient {
     postMessage(message: string): Promise<void>;
 
     log(logPart: LogPart): void;
+
+    onDidDeploy(): void;
+}
+
+export interface PluginDependencies {
+    metadata: PluginMetadata
+    mapping?: Map<string, string>
 }
 
 export const PluginDeployerHandler = Symbol('PluginDeployerHandler');
 export interface PluginDeployerHandler {
     deployFrontendPlugins(frontendPlugins: PluginDeployerEntry[]): Promise<void>;
     deployBackendPlugins(backendPlugins: PluginDeployerEntry[]): Promise<void>;
+
+    getPluginDependencies(pluginToBeInstalled: PluginDeployerEntry): Promise<PluginDependencies | undefined>
+}
+
+export interface GetDeployedPluginsParams {
+    pluginIds: string[]
+}
+
+export interface DeployedPlugin {
+    metadata: PluginMetadata;
+    contributes?: PluginContribution;
 }
 
 export const HostedPluginServer = Symbol('HostedPluginServer');
 export interface HostedPluginServer extends JsonRpcServer<HostedPluginClient> {
-    getHostedPlugin(): Promise<PluginMetadata | undefined>;
 
-    getDeployedMetadata(): Promise<PluginMetadata[]>;
-    getDeployedFrontendMetadata(): Promise<PluginMetadata[]>;
-    getDeployedBackendMetadata(): Promise<PluginMetadata[]>;
+    getDeployedPluginIds(): Promise<string[]>;
+
+    getDeployedPlugins(params: GetDeployedPluginsParams): Promise<DeployedPlugin[]>;
 
     getExtPluginAPI(): Promise<ExtPluginApi[]>;
 
     onMessage(message: string): Promise<void>;
 
-    isPluginValid(uri: string): Promise<boolean>;
-    runHostedPluginInstance(uri: string): Promise<string>;
-    runDebugHostedPluginInstance(uri: string, debugConfig: DebugConfiguration): Promise<string>;
-    terminateHostedPluginInstance(): Promise<void>;
-    isHostedPluginInstanceRunning(): Promise<boolean>;
-    getHostedPluginInstanceURI(): Promise<string>;
-    getHostedPluginURI(): Promise<string>;
-
-    runWatchCompilation(uri: string): Promise<void>;
-    stopWatchCompilation(uri: string): Promise<void>;
-    isWatchCompilationRunning(uri: string): Promise<boolean>;
 }
+
+export interface WorkspaceStorageKind {
+    workspace?: FileStat | undefined;
+    roots: FileStat[];
+}
+export type GlobalStorageKind = undefined;
+export type PluginStorageKind = GlobalStorageKind | WorkspaceStorageKind;
 
 /**
  * The JSON-RPC workspace interface.
@@ -608,9 +719,9 @@ export interface PluginServer {
      */
     deploy(pluginEntry: string): Promise<void>;
 
-    keyValueStorageSet(key: string, value: KeysToAnyValues, isGlobal: boolean): Promise<boolean>;
-    keyValueStorageGet(key: string, isGlobal: boolean): Promise<KeysToAnyValues>;
-    keyValueStorageGetAll(isGlobal: boolean): Promise<KeysToKeysToAnyValue>;
+    setStorageValue(key: string, value: KeysToAnyValues, kind: PluginStorageKind): Promise<boolean>;
+    getStorageValue(key: string, kind: PluginStorageKind): Promise<KeysToAnyValues>;
+    getAllStorageValues(kind: PluginStorageKind): Promise<KeysToKeysToAnyValue>;
 }
 
 export const ServerPluginRunner = Symbol('ServerPluginRunner');
@@ -624,7 +735,18 @@ export interface ServerPluginRunner {
     clientClosed(): void;
 
     /**
-     * Provides additional metadata.
+     * Provides additional deployed plugins.
      */
-    getExtraPluginMetadata(): Promise<PluginMetadata[]>;
+    getExtraDeployedPlugins(): Promise<DeployedPlugin[]>;
+
+    /**
+     * Provides additional plugin ids.
+     */
+    getExtraDeployedPluginIds(): Promise<string[]>;
+
+}
+
+export const PluginHostEnvironmentVariable = Symbol('PluginHostEnvironmentVariable');
+export interface PluginHostEnvironmentVariable {
+    process(env: NodeJS.ProcessEnv): void;
 }

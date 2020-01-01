@@ -14,36 +14,23 @@
  * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
  ********************************************************************************/
 
-import { Container, ContainerModule, interfaces } from 'inversify';
-import { PreferenceProvider, PreferenceScope } from '@theia/core/lib/browser/preferences';
-import { UserPreferenceProvider } from './user-preference-provider';
-import { WorkspacePreferenceProvider } from './workspace-preference-provider';
+import '../../src/browser/style/index.css';
+
+import { ContainerModule, interfaces } from 'inversify';
 import { bindViewContribution, WidgetFactory, FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { PreferencesContribution } from './preferences-contribution';
 import { createPreferencesTreeWidget } from './preference-tree-container';
 import { PreferencesMenuFactory } from './preferences-menu-factory';
 import { PreferencesFrontendApplicationContribution } from './preferences-frontend-application-contribution';
 import { PreferencesContainer, PreferencesTreeWidget, PreferencesEditorsContainer } from './preferences-tree-widget';
-import { FoldersPreferencesProvider } from './folders-preferences-provider';
-import { FolderPreferenceProvider, FolderPreferenceProviderFactory, FolderPreferenceProviderOptions } from './folder-preference-provider';
+import { bindPreferenceProviders } from './preference-bindings';
 
 import './preferences-monaco-contribution';
 
-export function bindPreferences(bind: interfaces.Bind, unbind: interfaces.Unbind): void {
-    unbind(PreferenceProvider);
+export const PreferencesWidgetFactory = Symbol('PreferencesWidgetFactory');
 
-    bind(PreferenceProvider).to(UserPreferenceProvider).inSingletonScope().whenTargetNamed(PreferenceScope.User);
-    bind(PreferenceProvider).to(WorkspacePreferenceProvider).inSingletonScope().whenTargetNamed(PreferenceScope.Workspace);
-    bind(PreferenceProvider).to(FoldersPreferencesProvider).inSingletonScope().whenTargetNamed(PreferenceScope.Folder);
-    bind(FolderPreferenceProvider).toSelf().inTransientScope();
-    bind(FolderPreferenceProviderFactory).toFactory(ctx =>
-        (options: FolderPreferenceProviderOptions) => {
-            const child = new Container({ defaultScope: 'Transient' });
-            child.parent = ctx.container;
-            child.bind(FolderPreferenceProviderOptions).toConstantValue(options);
-            return child.get(FolderPreferenceProvider);
-        }
-    );
+export function bindPreferences(bind: interfaces.Bind, unbind: interfaces.Unbind): void {
+    bindPreferenceProviders(bind, unbind);
 
     bindViewContribution(bind, PreferencesContribution);
 
@@ -53,10 +40,11 @@ export function bindPreferences(bind: interfaces.Bind, unbind: interfaces.Unbind
         createWidget: () => container.get(PreferencesContainer)
     }));
 
-    bind(WidgetFactory).toDynamicValue(({ container }) => ({
+    bind(PreferencesWidgetFactory).toDynamicValue(({ container }) => ({
         id: PreferencesTreeWidget.ID,
         createWidget: () => createPreferencesTreeWidget(container)
     })).inSingletonScope();
+    bind(WidgetFactory).toService(PreferencesWidgetFactory);
 
     bind(PreferencesEditorsContainer).toSelf();
     bind(WidgetFactory).toDynamicValue(({ container }) => ({
